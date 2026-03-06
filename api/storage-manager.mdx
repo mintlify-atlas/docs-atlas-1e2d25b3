@@ -208,6 +208,20 @@ const context = await synapse.storage.createContext({
 })
 ```
 
+### `getDefaultContext()`
+
+Get or create a default storage context (first endorsed provider with a new or existing data set).
+
+<ResponseField name="context" type="StorageContext">
+  A cached or newly created storage context using an endorsed provider
+</ResponseField>
+
+```typescript
+// Get default context (cached after first call)
+const context = await synapse.storage.getDefaultContext()
+await context.upload(data)
+```
+
 ### `createContexts()`
 
 Create multiple contexts for multi-provider redundancy.
