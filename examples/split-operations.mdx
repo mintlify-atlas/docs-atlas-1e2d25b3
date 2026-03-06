@@ -1,0 +1,463 @@
+---
+title: Split Operations
+description: Use store, pull, and commit operations for batch uploads
+icon: scissors
+---
+
+## Overview
+
+Split operations provide fine-grained control over the upload pipeline. Instead of the all-in-one `upload()` method, you manually orchestrate:
+
+1. **store()** - Upload data to primary provider
+2. **pull()** - Secondary providers fetch from primary
+3. **commit()** - Commit pieces on-chain
+
+This is more efficient for **batch uploads** because you can commit all pieces in a single transaction per provider.
+
+## When to Use Split Operations
+
+<CardGroup cols={2}>
+  <Card title="Multiple Files" icon="files">
+    Uploading many files at once (batch operations)
+  </Card>
+  <Card title="Custom Control" icon="sliders">
+    Need fine-grained control over each step
+  </Card>
+  <Card title="Retry Logic" icon="rotate">
+    Implement custom retry for specific stages
+  </Card>
+  <Card title="Testing" icon="flask">
+    Test individual stages of upload pipeline
+  </Card>
+</CardGroup>
+
+## Basic Split Operations
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import fs from 'fs'
+
+const synapse = await Synapse.create({ privateKey, rpcUrl })
+
+// Step 1: Create contexts (primary + secondaries)
+const [primary, ...secondaries] = await synapse.storage.createContexts({
+  count: 2,
+})
+
+console.log(`Primary: SP ${primary.provider.id}`)
+for (const sec of secondaries) {
+  console.log(`Secondary: SP ${sec.provider.id}`)
+}
+
+// Step 2: Store on primary
+const stored = await primary.store(fs.readFileSync('file.txt'))
+console.log(`Stored: ${stored.pieceCid}`)
+
+// Step 3: Pull to secondaries
+for (const secondary of secondaries) {
+  const pullResult = await secondary.pull({
+    pieces: [stored.pieceCid],
+    from: (cid) => primary.getPieceUrl(cid),
+  })
+  
+  if (pullResult.status === 'complete') {
+    console.log(`Pulled to SP ${secondary.provider.id}`)
+  }
+}
+
+// Step 4: Commit on all providers
+await primary.commit({ pieces: [{ pieceCid: stored.pieceCid }] })
+console.log(`Committed on primary`)
+
+for (const secondary of secondaries) {
+  await secondary.commit({ pieces: [{ pieceCid: stored.pieceCid }] })
+  console.log(`Committed on SP ${secondary.provider.id}`)
+}
+```
+
+## Batch Upload (Multiple Files)
+
+From [`utils/example-storage-e2e.js`](https://github.com/FilOzone/synapse/blob/main/utils/example-storage-e2e.js):
+
+```typescript
+import { Readable } from 'stream'
+import fs from 'fs'
+
+const files = ['file1.pdf', 'file2.pdf', 'file3.pdf']
+
+// Step 1: Create contexts
+const contexts = await synapse.storage.createContexts({
+  count: 2,
+  callbacks: {
+    onProviderSelected: (provider) => {
+      console.log(`Selected SP ${provider.id}`)
+    },
+  },
+})
+
+const [primary, ...secondaries] = contexts
+
+// Step 2: Store all files on primary (in parallel)
+const stored = await Promise.all(
+  files.map(async (file) => {
+    const stream = Readable.toWeb(fs.createReadStream(file))
+    console.log(`Storing ${file}...`)
+    const result = await primary.store(stream)
+    console.log(`  Stored: ${result.pieceCid}`)
+    return result
+  })
+)
+
+const pieceCids = stored.map(s => s.pieceCid)
+const pieceInputs = stored.map(s => ({ pieceCid: s.pieceCid }))
+
+// Step 3: Pull all pieces to each secondary
+const successfulSecondaries = []
+
+for (const secondary of secondaries) {
+  console.log(`\nPulling ${pieceCids.length} pieces to SP ${secondary.provider.id}...`)
+  
+  try {
+    // Pre-sign for commit (reuse signature)
+    const extraData = await secondary.presignForCommit(pieceInputs)
+    
+    const pullResult = await secondary.pull({ 
+      pieces: pieceCids, 
+      from: primary,
+      extraData,
+    })
+    
+    if (pullResult.status === 'complete') {
+      console.log('  Pull complete')
+      successfulSecondaries.push({ context: secondary, extraData })
+    }
+  } catch (error) {
+    console.error(`  Pull failed: ${error.message}`)
+  }
+}
+
+// Step 4: Commit all pieces in a SINGLE transaction per provider
+console.log(`\nCommitting ${stored.length} pieces...`)
+
+const primaryCommit = await primary.commit({ pieces: pieceInputs })
+console.log(`  Primary: tx ${primaryCommit.txHash.slice(0, 18)}...`)
+
+for (const { context, extraData } of successfulSecondaries) {
+  try {
+    const result = await context.commit({ pieces: pieceInputs, extraData })
+    console.log(`  SP ${context.provider.id}: tx ${result.txHash.slice(0, 18)}...`)
+  } catch (error) {
+    console.error(`  Commit failed on SP ${context.provider.id}`)
+  }
+}
+
+console.log('\n✓ All files uploaded and committed')
+```
+
+## Pre-Sign for Commit
+
+**Why:** The same EIP-712 signature is used for both pull validation (estimateGas) and commit (on-chain). Pre-signing avoids double wallet prompts.
+
+```typescript
+// Pre-sign extraData before pull
+const pieceInputs = [{ pieceCid: stored.pieceCid }]
+const extraData = await secondary.presignForCommit(pieceInputs)
+
+// Use same extraData for pull
+const pullResult = await secondary.pull({
+  pieces: [stored.pieceCid],
+  from: primary,
+  extraData, // SP validates via estimateGas
+})
+
+// And for commit
+if (pullResult.status === 'complete') {
+  await secondary.commit({
+    pieces: pieceInputs,
+    extraData, // Same signature for on-chain
+  })
+}
+```
+
+## Pull Progress Tracking
+
+```typescript
+const pullResult = await secondary.pull({
+  pieces: [pieceCid],
+  from: primary,
+  onProgress: (cid, status) => {
+    console.log(`${cid}: ${status}`)
+    // Status: 'pending' | 'indexing' | 'complete' | 'failed'
+  },
+})
+
+if (pullResult.status === 'complete') {
+  console.log('All pieces pulled successfully')
+} else {
+  const failed = pullResult.pieces.filter(p => p.status === 'failed')
+  console.error(`${failed.length} pieces failed`)
+}
+```
+
+## Commit with Callbacks
+
+```typescript
+const result = await primary.commit({
+  pieces: [{ pieceCid }],
+  onSubmitted: (txHash) => {
+    console.log(`Transaction submitted: ${txHash}`)
+    // Track transaction before waiting for receipt
+  },
+})
+
+console.log(`Committed: dataSetId ${result.dataSetId}`)
+console.log(`Piece IDs: ${result.pieceIds.join(', ')}`)
+```
+
+## Retry Failed Pulls
+
+```typescript
+const pullResult = await secondary.pull({
+  pieces: pieceCids,
+  from: primary,
+})
+
+if (pullResult.status !== 'complete') {
+  // Get failed pieces
+  const failedPieces = pullResult.pieces
+    .filter(p => p.status === 'failed')
+    .map(p => p.pieceCid)
+  
+  console.log(`Retrying ${failedPieces.length} failed pieces...`)
+  
+  // Retry only failed pieces
+  const retryResult = await secondary.pull({
+    pieces: failedPieces,
+    from: primary,
+  })
+  
+  if (retryResult.status === 'complete') {
+    console.log('Retry successful')
+  }
+}
+```
+
+## Parallel Pull to Multiple Secondaries
+
+```typescript
+const pullPromises = secondaries.map(async (secondary) => {
+  try {
+    const extraData = await secondary.presignForCommit(pieceInputs)
+    
+    const result = await secondary.pull({
+      pieces: pieceCids,
+      from: primary,
+      extraData,
+    })
+    
+    return { secondary, result, extraData, success: result.status === 'complete' }
+  } catch (error) {
+    return { secondary, error, success: false }
+  }
+})
+
+const pullResults = await Promise.all(pullPromises)
+
+// Filter successful pulls
+const successful = pullResults.filter(r => r.success)
+console.log(`${successful.length} / ${secondaries.length} pulls succeeded`)
+```
+
+## Custom Pull Source
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+// Pull from custom URL
+const pullResult = await secondary.pull({
+  pieces: [pieceCid],
+  from: (cid) => {
+    // Custom URL logic
+    return `https://custom-cdn.example.com/pieces/${cid}`
+  },
+})
+
+// Or use primary.getPieceUrl()
+const pullResult = await secondary.pull({
+  pieces: [pieceCid],
+  from: (cid) => primary.getPieceUrl(cid),
+})
+```
+
+## Abort Operations
+
+```typescript
+const controller = new AbortController()
+
+// Start upload
+const storePromise = primary.store(data, {
+  signal: controller.signal,
+})
+
+// Cancel after 5 seconds
+setTimeout(() => {
+  controller.abort()
+  console.log('Upload aborted')
+}, 5000)
+
+try {
+  const stored = await storePromise
+} catch (error) {
+  if (error.name === 'AbortError') {
+    console.log('Upload was cancelled')
+  }
+}
+```
+
+## Batch Commit with Mixed Metadata
+
+```typescript
+const pieces = [
+  { 
+    pieceCid: piece1, 
+    pieceMetadata: { category: 'documents', priority: 'high' } 
+  },
+  { 
+    pieceCid: piece2, 
+    pieceMetadata: { category: 'images', priority: 'low' } 
+  },
+  { 
+    pieceCid: piece3, 
+    pieceMetadata: { category: 'videos', priority: 'medium' } 
+  },
+]
+
+const result = await primary.commit({ pieces })
+console.log(`Committed ${result.pieceIds.length} pieces with metadata`)
+```
+
+## Error Handling
+
+```typescript
+try {
+  // Store
+  const stored = await primary.store(data)
+} catch (error) {
+  if (error.message.includes('size exceeds')) {
+    console.error('File too large')
+  } else if (error.message.includes('network')) {
+    console.error('Network error, retry')
+  }
+  throw error
+}
+
+try {
+  // Pull
+  const pullResult = await secondary.pull({ pieces: [pieceCid], from: primary })
+  
+  if (pullResult.status !== 'complete') {
+    const failures = pullResult.pieces.filter(p => p.status === 'failed')
+    for (const failure of failures) {
+      console.error(`Failed to pull ${failure.pieceCid}: ${failure.error}`)
+    }
+  }
+} catch (error) {
+  console.error('Pull error:', error.message)
+}
+
+try {
+  // Commit
+  const result = await primary.commit({ pieces: [{ pieceCid }] })
+} catch (error) {
+  if (error.message.includes('insufficient funds')) {
+    console.error('Insufficient USDFC balance')
+  } else if (error.message.includes('allowance')) {
+    console.error('Need to approve operator')
+  }
+  throw error
+}
+```
+
+## Context Reuse
+
+```typescript
+// Create contexts once
+const [primary, secondary] = await synapse.storage.createContexts({ count: 2 })
+
+// Upload multiple files using same contexts
+const files = ['file1.txt', 'file2.txt', 'file3.txt']
+const allStored = []
+
+for (const file of files) {
+  const stored = await primary.store(fs.readFileSync(file))
+  allStored.push(stored)
+  console.log(`Stored ${file}: ${stored.pieceCid}`)
+}
+
+// Pull all at once
+const pieceCids = allStored.map(s => s.pieceCid)
+const extraData = await secondary.presignForCommit(
+  pieceCids.map(cid => ({ pieceCid: cid }))
+)
+
+await secondary.pull({ pieces: pieceCids, from: primary, extraData })
+
+// Commit all in one transaction
+await primary.commit({ pieces: pieceCids.map(cid => ({ pieceCid: cid })) })
+await secondary.commit({ 
+  pieces: pieceCids.map(cid => ({ pieceCid: cid })),
+  extraData,
+})
+
+console.log('All files committed')
+```
+
+## Transaction Efficiency
+
+```typescript
+// ❌ Inefficient: N transactions (one per file)
+for (const file of files) {
+  await synapse.storage.upload(file)
+}
+// Total: N * 2 transactions (primary + secondary)
+
+// ✓ Efficient: 2 transactions total (batch commit)
+const [primary, secondary] = await synapse.storage.createContexts({ count: 2 })
+const stored = await Promise.all(
+  files.map(f => primary.store(f))
+)
+const pieces = stored.map(s => ({ pieceCid: s.pieceCid }))
+const extraData = await secondary.presignForCommit(pieces)
+await secondary.pull({ pieces: pieces.map(p => p.pieceCid), from: primary, extraData })
+await primary.commit({ pieces })
+await secondary.commit({ pieces, extraData })
+// Total: 2 transactions (one per provider)
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Batch Commits" icon="layer-group">
+    Commit multiple pieces in one transaction
+  </Card>
+  <Card title="Pre-Sign" icon="signature">
+    Use presignForCommit to avoid double prompts
+  </Card>
+  <Card title="Parallel Pulls" icon="arrows-split-up-and-left">
+    Pull to multiple secondaries in parallel
+  </Card>
+  <Card title="Reuse Contexts" icon="recycle">
+    Reuse contexts for multiple uploads
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Storage Operations" href="/guides/storage-operations" icon="hard-drive">
+    Learn about the upload/download flow
+  </Card>
+  <Card title="Multi-Copy Storage" href="/examples/multi-copy-storage" icon="copy">
+    Replicate data across multiple providers
+  </Card>
+</CardGroup>

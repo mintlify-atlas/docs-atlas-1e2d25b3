@@ -1,97 +1,124 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Welcome to Synapse SDK"
+description: "JavaScript SDK for building on Filecoin Onchain Cloud with decentralized storage and payment services"
 ---
 
-## Setting up
+<div className="hero-section" style={{ background: 'linear-gradient(135deg, #0995f8 0%, #5cb8fc 100%)', padding: '60px 40px', borderRadius: '12px', color: 'white', marginBottom: '40px' }}>
+  <h1 style={{ fontSize: '48px', fontWeight: '700', marginBottom: '20px', color: 'white' }}>Synapse SDK</h1>
+  <p style={{ fontSize: '20px', opacity: '0.95', marginBottom: '30px', maxWidth: '700px' }}>
+    Build decentralized applications on Filecoin with multi-copy storage, integrated payments, and seamless Web3 UX.
+  </p>
+  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+    <a href="/quickstart" style={{ background: '#ffffff', color: '#0995f8', padding: '12px 24px', borderRadius: '24px', fontWeight: '700', textDecoration: 'none', display: 'inline-block' }}>
+      Get Started
+    </a>
+    <a href="https://github.com/FilOzone/synapse-sdk" style={{ background: 'transparent', color: '#ffffff', padding: '12px 24px', borderRadius: '24px', fontWeight: '700', textDecoration: 'none', display: 'inline-block', border: '2px solid white' }}>
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Key Features
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
+Synapse SDK provides everything you need to build production-ready applications on Filecoin Onchain Cloud.
+
+<CardGroup cols={2}>
+  <Card title="Multi-Copy Storage" icon="copy" href="/concepts/multi-copy-upload">
+    Automatic redundancy with endorsed and approved storage providers for data durability
+  </Card>
+  <Card title="Integrated Payments" icon="credit-card" href="/guides/payment-management">
+    Built-in payment rails supporting ERC20 tokens and FIL for seamless transactions
+  </Card>
+  <Card title="Session Keys" icon="key" href="/concepts/session-keys">
+    Delegated signing for gasless transactions and improved user experience
+  </Card>
+  <Card title="FilBeam CDN" icon="bolt" href="/guides/filbeam-cdn">
+    Fast content delivery through integrated CDN infrastructure
+  </Card>
+  <Card title="Type-Safe API" icon="code" href="/api/synapse-class">
+    TypeScript-first SDK with full type inference and IDE support
+  </Card>
+  <Card title="Browser & Node.js" icon="laptop-code" href="/examples/browser-integration">
+    Universal compatibility for frontend and backend applications
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+Install Synapse SDK and create your first storage application in minutes.
+
+<CodeGroup>
+
+```bash npm
+npm install @filoz/synapse-sdk viem
+```
+
+```bash yarn
+yarn add @filoz/synapse-sdk viem
+```
+
+```bash pnpm
+pnpm add @filoz/synapse-sdk viem
+```
+
+</CodeGroup>
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { calibration } from '@filoz/synapse-sdk/chains'
+
+// Initialize Synapse client
+const synapse = await Synapse.create({
+  chain: calibration,
+  account: privateKeyToAccount('0x...'),
+})
+
+// Upload data with automatic multi-copy redundancy
+const result = await synapse.storage.upload(fileData)
+console.log('Uploaded to providers:', result.copies)
+
+// Download from any available provider
+const data = await synapse.storage.download({ 
+  pieceCid: result.copies[0].pieceCid 
+})
+```
+
+<Card title="Continue with Quickstart" icon="rocket" href="/quickstart" horizontal>
+  Build your first application with step-by-step instructions
 </Card>
 
-## Make it yours
+## Documentation
 
-Design a docs site that looks great and empowers your users.
+Explore comprehensive guides and API references to build with Synapse.
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={3}>
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand the architecture and key concepts
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Guides" icon="map" href="/guides/storage-operations">
+    Learn how to implement storage and payment features
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="API Reference" icon="code" href="/api/synapse-class">
+    Detailed documentation of all SDK methods
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Examples" icon="lightbulb" href="/examples/upload-download">
+    Real-world examples for common use cases
   </Card>
-</Columns>
+  <Card title="Smart Contracts" icon="file-contract" href="/contracts/overview">
+    Learn about the underlying smart contracts
+  </Card>
+  <Card title="React Hooks" icon="react" href="/api/react/overview">
+    Use Synapse with React applications
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Community & Support
 
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="GitHub" icon="github" href="https://github.com/FilOzone/synapse-sdk">
+    View source code, report issues, and contribute
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Examples Repository" icon="folder-open" href="https://github.com/FilOzone/synapse-sdk/tree/master/examples">
+    Browse example applications and integrations
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+</CardGroup>

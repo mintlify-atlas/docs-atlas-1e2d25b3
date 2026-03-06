@@ -1,0 +1,305 @@
+---
+title: 'FilBeamService'
+description: 'Monitor CDN statistics and pay-per-byte quotas'
+---
+
+## Overview
+
+The `FilBeamService` provides access to FilBeam's CDN and pay-per-byte retrieval infrastructure. FilBeam enables efficient data retrieval with usage-based billing by acting as a trusted intermediary that measures traffic between clients and storage providers.
+
+Access via `synapse.filbeam`.
+
+## Architecture
+
+FilBeam operates as a caching layer:
+
+```
+Client ←→ FilBeam (cache + metering) ←→ Storage Provider
+         │                    │
+         └──── Cache Hit      └──── Cache Miss
+```
+
+- **Cache Hit**: Data served from FilBeam's cache (fast)
+- **Cache Miss**: Data fetched from storage provider (triggers caching)
+
+Both generate billable egress events, enabling storage providers to earn retrieval incentives.
+
+## Methods
+
+### `getDataSetStats()`
+
+Retrieve remaining pay-per-byte quotas for a data set.
+
+<ParamField path="dataSetId" type="string | number" required>
+  Data set ID to query statistics for
+</ParamField>
+
+<ResponseField name="stats" type="DataSetStats">
+  Usage statistics:
+  - `cdnEgressQuota` - Remaining bytes for cache hits
+  - `cacheMissEgressQuota` - Remaining bytes for cache misses
+</ResponseField>
+
+```typescript
+const stats = await synapse.filbeam.getDataSetStats('12345')
+
+console.log('Remaining CDN egress:', stats.cdnEgressQuota.toString(), 'bytes')
+console.log('Remaining cache miss egress:', stats.cacheMissEgressQuota.toString(), 'bytes')
+
+// Calculate total remaining
+const totalRemaining = stats.cdnEgressQuota + stats.cacheMissEgressQuota
+const TiB = 1024n ** 4n
+const remainingTiB = Number(totalRemaining / TiB)
+
+console.log(`Total remaining: ${remainingTiB} TiB`)
+```
+
+## Understanding Quotas
+
+### CDN Egress Quota
+
+Bytes that can be served from FilBeam's cache:
+- **Fast delivery** - Data already cached
+- **Lower latency** - No provider fetch required
+- **Usage-based billing** - Charged per byte served
+
+### Cache Miss Egress Quota
+
+Bytes that can be retrieved from storage providers:
+- **Initial retrieval** - Data not yet cached
+- **Triggers caching** - Subsequent requests become cache hits
+- **Usage-based billing** - Charged per byte fetched
+
+### Quota Management
+
+Quotas are funded when creating or updating CDN-enabled data sets:
+
+```typescript
+// Create context with CDN
+const context = await synapse.storage.createContext({
+  withCDN: true
+})
+
+// Upload funds the initial quota
+const result = await context.upload(data)
+const dataSetId = result.copies[0].dataSetId
+
+// Monitor quota over time
+const stats = await synapse.filbeam.getDataSetStats(dataSetId.toString())
+```
+
+## Monitoring Example
+
+### Basic Monitoring
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { formatUnits } from 'viem'
+
+const synapse = Synapse.create({ account, chain })
+
+// Get data sets
+const dataSets = await synapse.storage.findDataSets()
+
+// Monitor each CDN-enabled data set
+for (const ds of dataSets) {
+  if (!ds.withCDN) continue
+  
+  const stats = await synapse.filbeam.getDataSetStats(
+    ds.dataSetId.toString()
+  )
+  
+  const GiB = 1024n ** 3n
+  const cdnGiB = Number(stats.cdnEgressQuota / GiB)
+  const missGiB = Number(stats.cacheMissEgressQuota / GiB)
+  
+  console.log(`Dataset ${ds.dataSetId}:`)
+  console.log(`  CDN remaining: ${cdnGiB} GiB`)
+  console.log(`  Cache miss remaining: ${missGiB} GiB`)
+  console.log(`  Total: ${cdnGiB + missGiB} GiB`)
+}
+```
+
+### Continuous Monitoring with Alerts
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = Synapse.create({ account, chain })
+const dataSetId = '12345'
+
+// Monitor every minute
+const interval = setInterval(async () => {
+  try {
+    const stats = await synapse.filbeam.getDataSetStats(dataSetId)
+    
+    const TiB = 1024n ** 4n
+    const totalRemaining = stats.cdnEgressQuota + stats.cacheMissEgressQuota
+    const remainingTiB = Number(totalRemaining / TiB)
+    
+    console.log(`${new Date().toISOString()}: ${remainingTiB.toFixed(2)} TiB remaining`)
+    
+    // Alert thresholds
+    if (remainingTiB < 1) {
+      console.warn('CRITICAL: Less than 1 TiB remaining!')
+      // Send alert notification
+      await sendAlert('Low quota warning', {
+        dataSetId,
+        remaining: remainingTiB,
+        cdnEgress: stats.cdnEgressQuota,
+        cacheMissEgress: stats.cacheMissEgressQuota
+      })
+    } else if (remainingTiB < 5) {
+      console.warn('WARNING: Less than 5 TiB remaining')
+    }
+  } catch (error) {
+    console.error('Monitoring error:', error)
+  }
+}, 60000) // Every 60 seconds
+
+// Stop monitoring
+// clearInterval(interval)
+```
+
+### Dashboard Integration
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+class FilBeamMonitor {
+  private synapse: Synapse
+  private dataSetIds: string[]
+  
+  constructor(synapse: Synapse) {
+    this.synapse = synapse
+    this.dataSetIds = []
+  }
+  
+  async initialize() {
+    // Find all CDN-enabled datasets
+    const dataSets = await this.synapse.storage.findDataSets()
+    this.dataSetIds = dataSets
+      .filter(ds => ds.withCDN)
+      .map(ds => ds.dataSetId.toString())
+    
+    console.log(`Monitoring ${this.dataSetIds.length} CDN datasets`)
+  }
+  
+  async getAllStats() {
+    const stats = await Promise.all(
+      this.dataSetIds.map(async (id) => {
+        try {
+          const stat = await this.synapse.filbeam.getDataSetStats(id)
+          return { dataSetId: id, ...stat, error: null }
+        } catch (error) {
+          return { 
+            dataSetId: id, 
+            cdnEgressQuota: 0n,
+            cacheMissEgressQuota: 0n,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          }
+        }
+      })
+    )
+    
+    return stats
+  }
+  
+  async getAggregateStats() {
+    const allStats = await this.getAllStats()
+    
+    let totalCdnQuota = 0n
+    let totalCacheMissQuota = 0n
+    let errorCount = 0
+    
+    for (const stat of allStats) {
+      if (stat.error) {
+        errorCount++
+        continue
+      }
+      totalCdnQuota += stat.cdnEgressQuota
+      totalCacheMissQuota += stat.cacheMissEgressQuota
+    }
+    
+    const TiB = 1024n ** 4n
+    
+    return {
+      totalDataSets: allStats.length,
+      successfulQueries: allStats.length - errorCount,
+      totalCdnQuotaTiB: Number(totalCdnQuota / TiB),
+      totalCacheMissQuotaTiB: Number(totalCacheMissQuota / TiB),
+      totalQuotaTiB: Number((totalCdnQuota + totalCacheMissQuota) / TiB),
+      datasets: allStats
+    }
+  }
+}
+
+// Usage
+const monitor = new FilBeamMonitor(synapse)
+await monitor.initialize()
+
+const aggregate = await monitor.getAggregateStats()
+console.log('Aggregate stats:', aggregate)
+```
+
+## Error Handling
+
+```typescript
+try {
+  const stats = await synapse.filbeam.getDataSetStats('12345')
+  console.log('Stats:', stats)
+} catch (error) {
+  if (error instanceof Error) {
+    if (error.message.includes('not found')) {
+      console.error('Data set not found or not CDN-enabled')
+    } else if (error.message.includes('HTTP 404')) {
+      console.error('Data set not tracked by FilBeam')
+    } else {
+      console.error('FilBeam API error:', error.message)
+    }
+  }
+}
+```
+
+## Network Support
+
+FilBeam services are available on:
+- **Mainnet**: `filbeam.io`
+- **Calibration**: `calibration.filbeam.io`
+
+The service automatically uses the correct endpoint based on the chain configuration.
+
+```typescript
+import { mainnet, calibration } from '@filoz/synapse-core/chains'
+
+// Mainnet - uses filbeam.io
+const synapseMainnet = Synapse.create({ account, chain: mainnet })
+
+// Calibration - uses calibration.filbeam.io  
+const synapseCalibration = Synapse.create({ account, chain: calibration })
+```
+
+## Billing and Pricing
+
+Quota consumption is billed based on actual egress:
+
+```typescript
+// Get current pricing
+const storageInfo = await synapse.storage.getStorageInfo()
+
+console.log('CDN egress price/TiB:', storageInfo.pricing.withCDN.perTiBPerMonth)
+console.log('Cache miss price/TiB:', storageInfo.pricing.noCDN.perTiBPerMonth)
+```
+
+<Note>
+**Usage-Based Billing**
+
+CDN costs are usage-based (pay-per-byte) for actual egress, not subscription-based. The quota represents pre-funded bytes that can be served.
+</Note>
+
+## See Also
+
+- [FilBeam Documentation](https://docs.filbeam.com) - Official docs
+- [Pay-Per-Byte Model](https://meridian.space/blog/introducing-pay-per-byte-a-new-era-for-filecoin-retrieval) - Architecture overview
+- [CDN Guide](/guides/filbeam-cdn) - Using CDN services
+- [StorageContext](/api/storage-context) - CDN-enabled uploads

@@ -1,0 +1,499 @@
+---
+title: Session Keys
+description: Delegated signing without exposing your main wallet
+---
+
+# Session Keys
+
+Session keys allow you to delegate signing authority to a temporary key without exposing your main wallet's private key. This is essential for building secure dApps and automated systems.
+
+## Why Session Keys?
+
+<CardGroup cols={2}>
+  <Card title="Security" icon="shield-check">
+    Never expose your main wallet's private key in application code. Session keys can be revoked instantly.
+  </Card>
+  <Card title="User Experience" icon="user">
+    Users sign once to create a session, then operations proceed without repeated wallet prompts.
+  </Card>
+  <Card title="Automation" icon="robot">
+    Backend services can perform operations on behalf of users without accessing their main keys.
+  </Card>
+  <Card title="Scoped Permissions" icon="lock">
+    Session keys are limited to specific operations and can have expiration times.
+  </Card>
+</CardGroup>
+
+## How Session Keys Work
+
+```text
+Main Wallet (Root)
+  │
+  │ Signs login transaction
+  │ Sets permissions & expiry
+  │
+  ↓
+Session Key Registry (on-chain)
+  │
+  │ Records: Root → Session mapping
+  │ Stores: Permissions & expiration
+  │
+  ↓
+Session Key (Temporary)
+  │
+  │ Signs operations on behalf of root
+  │ Validated by contracts
+  │
+  ↓
+Smart Contracts (FWSS, etc.)
+  - Verify session key is authorized
+  - Check permissions match operation
+  - Ensure not expired
+  - Bill the root wallet (payer)
+```
+
+<Info>
+  The **payer** address always remains the root wallet, even when signing with a session key. Payments come from the main wallet.
+</Info>
+
+## Creating a Session Key
+
+### Using synapse-core
+
+Low-level session key creation:
+
+```typescript
+import * as SessionKey from '@filoz/synapse-core/session-key'
+import { calibration } from '@filoz/synapse-core/chains'
+import { generatePrivateKey } from 'viem/accounts'
+import { http } from 'viem'
+
+// Generate a new temporary key
+const sessionPrivateKey = generatePrivateKey()
+
+// Create session key linked to your main wallet
+const sessionKey = SessionKey.fromSecp256k1({
+  chain: calibration,
+  transport: http(),
+  privateKey: sessionPrivateKey,
+  root: mainAccount.address, // Your main wallet address
+})
+
+console.log('Session key address:', sessionKey.address)
+console.log('Root address:', sessionKey.rootAddress)
+```
+
+### Login: Set Permissions
+
+Register the session key on-chain with permissions:
+
+```typescript
+import * as SessionKey from '@filoz/synapse-core/session-key'
+import { login } from '@filoz/synapse-core/session-key'
+import { createWalletClient, http } from 'viem'
+
+// Your main wallet client
+const rootClient = createWalletClient({
+  chain: calibration,
+  transport: http(),
+  account: mainAccount, // Has private key or wallet provider
+})
+
+// Login: authorize session key with FWSS permissions
+const hash = await login(rootClient, {
+  sessionKeyAddress: sessionKey.address,
+  permissions: SessionKey.DefaultFwssPermissions,
+  expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), // 24 hours
+})
+
+await rootClient.waitForTransactionReceipt({ hash })
+
+console.log('Session key registered')
+
+// Sync expirations
+await sessionKey.syncExpirations()
+```
+
+**Default FWSS Permissions**:
+```typescript
+export const DefaultFwssPermissions = [
+  Permission.CreateDataSetAndAddPieces,
+  Permission.AddPieces,
+  Permission.SchedulePieceRemoval,
+  Permission.TerminateDataSet,
+]
+```
+
+These cover all standard storage operations.
+
+### Use with Synapse
+
+Pass the session key to Synapse:
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = Synapse.create({
+  chain: calibration,
+  transport: http(),
+  account: mainAccount,
+  sessionKey, // Session key for signing
+})
+
+// All operations use the session key for signing
+// but payments come from mainAccount
+const result = await synapse.storage.upload(data)
+
+console.log('Uploaded with session key')
+console.log('Payer:', mainAccount.address) // Root wallet pays
+```
+
+<Note>
+  The session key must have permissions synced before passing to Synapse, or initialization will fail.
+</Note>
+
+## Full Example: Main Wallet + Session Key
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import * as SessionKey from '@filoz/synapse-core/session-key'
+import { login } from '@filoz/synapse-core/session-key'
+import { calibration } from '@filoz/synapse-core/chains'
+import { http } from 'viem'
+import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
+import { createWalletClient } from 'viem'
+
+async function setupSession() {
+  // 1. Main wallet (has funds, approvals, etc.)
+  const mainAccount = privateKeyToAccount('0x...' as `0x${string}`)
+  
+  const rootClient = createWalletClient({
+    chain: calibration,
+    transport: http(),
+    account: mainAccount,
+  })
+  
+  // 2. Generate temporary session key
+  const sessionPrivateKey = generatePrivateKey()
+  console.log('Generated session private key:', sessionPrivateKey)
+  
+  // 3. Create session key object
+  const sessionKey = SessionKey.fromSecp256k1({
+    chain: calibration,
+    transport: http(),
+    privateKey: sessionPrivateKey,
+    root: mainAccount.address,
+  })
+  
+  console.log('Session address:', sessionKey.address)
+  
+  // 4. Login: register on-chain
+  console.log('Logging in session key...')
+  const hash = await login(rootClient, {
+    sessionKeyAddress: sessionKey.address,
+    permissions: SessionKey.DefaultFwssPermissions,
+    expiry: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
+  })
+  
+  await rootClient.waitForTransactionReceipt({ hash })
+  console.log('Login confirmed')
+  
+  // 5. Sync permissions
+  await sessionKey.syncExpirations()
+  
+  // 6. Use with Synapse
+  const synapse = Synapse.create({
+    chain: calibration,
+    transport: http(),
+    account: mainAccount,
+    sessionKey,
+  })
+  
+  console.log('Synapse created with session key')
+  
+  // 7. Upload with session key signing
+  const data = new TextEncoder().encode('Session key test')
+  const result = await synapse.storage.upload(data)
+  
+  console.log('Upload successful')
+  console.log('PieceCID:', result.pieceCid)
+  console.log('Signed by:', sessionKey.address)
+  console.log('Paid by:', mainAccount.address)
+  
+  return { synapse, sessionKey, sessionPrivateKey }
+}
+
+setupSession().catch(console.error)
+```
+
+**Store the session private key securely**:
+- In environment variables for backend services
+- In secure storage for mobile apps
+- In localStorage for web apps (with user awareness)
+
+<Warning>
+  Anyone with the session private key can perform authorized operations until expiry. Treat session keys as sensitive credentials.
+</Warning>
+
+## Checking Permissions
+
+Verify session key has required permissions:
+
+```typescript
+const hasPermission = sessionKey.hasPermission(
+  SessionKey.Permission.CreateDataSetAndAddPieces
+)
+
+if (!hasPermission) {
+  console.error('Session key lacks required permission')
+  // Re-login or request new permissions
+}
+
+// Check multiple permissions
+const hasAll = sessionKey.hasPermissions([
+  SessionKey.Permission.CreateDataSetAndAddPieces,
+  SessionKey.Permission.AddPieces,
+])
+```
+
+## Watching for Updates
+
+Listen for permission changes (e.g., renewal, revocation):
+
+```typescript
+// Start watching
+const unwatch = await sessionKey.watch()
+
+// Listen for events
+sessionKey.addEventListener('connected', (expirations) => {
+  console.log('Session connected, expirations:', expirations)
+})
+
+sessionKey.addEventListener('expirationsUpdated', (expirations) => {
+  console.log('Permissions updated:', expirations)
+})
+
+sessionKey.addEventListener('disconnected', () => {
+  console.log('Session disconnected')
+})
+
+sessionKey.addEventListener('error', (error) => {
+  console.error('Session error:', error)
+})
+
+// Stop watching
+unwatch()
+```
+
+## Revoking Session Keys
+
+Revoke a session key before expiry:
+
+```typescript
+import { revoke } from '@filoz/synapse-core/session-key'
+
+// Sign with main wallet to revoke
+const hash = await revoke(rootClient, {
+  sessionKeyAddress: sessionKey.address,
+  permissions: SessionKey.DefaultFwssPermissions,
+})
+
+await rootClient.waitForTransactionReceipt({ hash })
+
+console.log('Session key revoked')
+
+// Session key can no longer sign operations
+```
+
+<Info>
+  Revocation is instant. The session key cannot be used for new operations after the transaction confirms.
+</Info>
+
+## Renewing Session Keys
+
+Extend expiration by calling `login()` again:
+
+```typescript
+// Re-login with new expiry
+const hash = await login(rootClient, {
+  sessionKeyAddress: sessionKey.address,
+  permissions: SessionKey.DefaultFwssPermissions,
+  expiry: BigInt(Math.floor(Date.now() / 1000) + 7200), // 2 more hours
+})
+
+await rootClient.waitForTransactionReceipt({ hash })
+
+// Sync the updated expirations
+await sessionKey.syncExpirations()
+
+console.log('Session renewed')
+```
+
+## Use Cases
+
+### Backend Service
+
+A backend service that uploads on behalf of users:
+
+```typescript
+// One-time setup (user signs)
+async function initUserSession(userId: string, userAccount: Account) {
+  const sessionPrivateKey = generatePrivateKey()
+  
+  const sessionKey = SessionKey.fromSecp256k1({
+    chain: calibration,
+    privateKey: sessionPrivateKey,
+    root: userAccount.address,
+  })
+  
+  // User signs login
+  const hash = await login(userClient, {
+    sessionKeyAddress: sessionKey.address,
+    permissions: SessionKey.DefaultFwssPermissions,
+    expiry: BigInt(Math.floor(Date.now() / 1000) + 86400 * 7), // 7 days
+  })
+  
+  await userClient.waitForTransactionReceipt({ hash })
+  
+  // Store session private key
+  await db.saveSessionKey(userId, sessionPrivateKey, sessionKey.address)
+  
+  return sessionKey
+}
+
+// Automated operations (no user interaction)
+async function uploadForUser(userId: string, data: Uint8Array) {
+  const { sessionPrivateKey, rootAddress } = await db.getSessionKey(userId)
+  
+  const sessionKey = SessionKey.fromSecp256k1({
+    chain: calibration,
+    privateKey: sessionPrivateKey as `0x${string}`,
+    root: rootAddress,
+  })
+  
+  const synapse = Synapse.create({
+    chain: calibration,
+    account: rootAddress, // Root pays
+    sessionKey, // Session signs
+  })
+  
+  return await synapse.storage.upload(data)
+}
+```
+
+### Web App
+
+A web app that reduces wallet prompts:
+
+```typescript
+// User clicks "Connect Wallet"
+async function connectWallet() {
+  const provider = window.ethereum
+  const [address] = await provider.request({ method: 'eth_requestAccounts' })
+  
+  // Generate session key
+  const sessionPrivateKey = generatePrivateKey()
+  localStorage.setItem('session_key', sessionPrivateKey)
+  
+  const sessionKey = SessionKey.fromSecp256k1({
+    chain: calibration,
+    privateKey: sessionPrivateKey,
+    root: address,
+  })
+  
+  // User signs login (one wallet prompt)
+  const walletClient = createWalletClient({
+    chain: calibration,
+    transport: custom(provider),
+    account: address,
+  })
+  
+  const hash = await login(walletClient, {
+    sessionKeyAddress: sessionKey.address,
+    permissions: SessionKey.DefaultFwssPermissions,
+    expiry: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1 hour
+  })
+  
+  await walletClient.waitForTransactionReceipt({ hash })
+  
+  // Now user can upload without prompts
+  return sessionKey
+}
+
+// Upload without wallet prompt
+async function upload(data: Uint8Array) {
+  const sessionPrivateKey = localStorage.getItem('session_key') as `0x${string}`
+  const [address] = await window.ethereum.request({ method: 'eth_accounts' })
+  
+  const sessionKey = SessionKey.fromSecp256k1({
+    chain: calibration,
+    privateKey: sessionPrivateKey,
+    root: address,
+  })
+  
+  const synapse = Synapse.create({
+    chain: calibration,
+    transport: custom(window.ethereum),
+    account: address,
+    sessionKey,
+  })
+  
+  return await synapse.storage.upload(data)
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use short expirations">
+    Session keys should expire quickly:
+    - Web apps: 1-2 hours
+    - Mobile apps: 1 day
+    - Backend services: 7 days max
+    
+    Renew as needed rather than using long expirations.
+  </Accordion>
+  
+  <Accordion title="Store session keys securely">
+    - **Backend**: Environment variables, secret managers
+    - **Web**: localStorage (inform users)
+    - **Mobile**: Secure enclave, keychain
+    
+    Never commit session keys to version control.
+  </Accordion>
+  
+  <Accordion title="Sync expirations after login">
+    Always call `syncExpirations()` after `login()`:
+    ```typescript
+    await login(client, { ... })
+    await sessionKey.syncExpirations()
+    ```
+    
+    Otherwise, permission checks may fail.
+  </Accordion>
+  
+  <Accordion title="Revoke on logout">
+    When a user logs out, revoke the session key:
+    ```typescript
+    await revoke(client, { sessionKeyAddress: sessionKey.address, ... })
+    localStorage.removeItem('session_key')
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand how session keys fit into the SDK
+  </Card>
+  <Card title="Session Keys Guide" icon="key" href="/guides/session-keys">
+    Practical examples of session key usage
+  </Card>
+  <Card title="Browser Integration" icon="browser" href="/examples/browser-integration">
+    Use session keys in web apps
+  </Card>
+  <Card title="Storage Operations" icon="database" href="/guides/storage-operations">
+    Upload and download with session keys
+  </Card>
+</CardGroup>

@@ -1,0 +1,465 @@
+---
+title: Service Provider Registry
+description: Contract for managing storage providers in Filecoin Onchain Cloud
+---
+
+## Overview
+
+The ServiceProviderRegistry contract manages all storage providers in the ecosystem. It handles:
+
+- Provider registration and removal
+- Product offerings (PDP, CDN, etc.)
+- Provider metadata and capabilities
+- Active/inactive status tracking
+- Provider discovery and queries
+
+## Data Structures
+
+### Provider Info
+
+```solidity
+struct ProviderInfo {
+    uint256 id;
+    address serviceProvider;  // Provider's address
+    address payee;            // Address that receives payments
+    string name;
+    string description;
+    bool active;
+}
+```
+
+### Product Types
+
+```solidity
+enum ProductType {
+    PDP  // Proof of Data Possession storage
+}
+```
+
+### PDP Offering
+
+```solidity
+struct PDPOffering {
+    string serviceURL;        // HTTP endpoint for Curio
+    uint256 minPieceSizeInBytes;
+    uint256 maxPieceSizeInBytes;
+    uint256 chainId;
+    address verifierAddr;     // PDPVerifier contract
+}
+```
+
+## Provider Registration
+
+### Register Provider
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp-registry'
+import { createWalletClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+import { SIZE_CONSTANTS } from '@filoz/synapse-sdk'
+
+const client = createWalletClient({
+  chain: calibration,
+  transport: http(),
+  account,
+})
+
+const hash = await SP.registerProvider(client, {
+  payee: account.address,
+  name: 'My Storage Provider',
+  description: 'Fast and reliable Filecoin storage',
+  pdpOffering: {
+    serviceURL: 'https://storage.example.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 32n,
+    chainId: calibration.id,
+    verifierAddr: calibration.contracts.pdpVerifier.address,
+  },
+  capabilities: {
+    region: 'us-west',
+    tier: 'premium',
+    features: 'filbeam-enabled',
+  },
+})
+
+await client.waitForTransactionReceipt({ hash })
+```
+
+### Update Provider Info
+
+```typescript
+const hash = await SP.updateProviderInfo(client, {
+  name: 'Updated Provider Name',
+  description: 'New and improved storage service',
+})
+```
+
+### Remove Provider
+
+```typescript
+const hash = await SP.removeProvider(client)
+```
+
+## Product Management
+
+### Add PDP Product
+
+```typescript
+const hash = await SP.addProduct(client, {
+  pdpOffering: {
+    serviceURL: 'https://storage.example.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 64n,
+    chainId: calibration.id,
+    verifierAddr: calibration.contracts.pdpVerifier.address,
+  },
+  capabilities: {
+    region: 'us-west',
+    tier: 'enterprise',
+    sla: '99.99',
+  },
+})
+```
+
+### Update Product
+
+```typescript
+const hash = await SP.updateProduct(client, {
+  pdpOffering: {
+    serviceURL: 'https://new-url.example.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 128n,
+    chainId: calibration.id,
+    verifierAddr: calibration.contracts.pdpVerifier.address,
+  },
+  capabilities: {
+    region: 'us-west',
+    tier: 'enterprise',
+    sla: '99.99',
+    bandwidth: '10Gbps',
+  },
+})
+```
+
+### Remove Product
+
+```typescript
+const hash = await SP.removeProduct(client, {
+  productType: 'PDP',
+})
+```
+
+## Provider Queries
+
+### Get Provider by ID
+
+```typescript
+import { createPublicClient } from 'viem'
+
+const client = createPublicClient({
+  chain: calibration,
+  transport: http(),
+})
+
+const provider = await SP.getPDPProvider(client, { 
+  providerId: 1n 
+})
+
+if (provider) {
+  console.log('Name:', provider.name)
+  console.log('Address:', provider.serviceProvider)
+  console.log('Active:', provider.active)
+  console.log('PDP URL:', provider.pdp.serviceURL)
+  console.log('Min size:', provider.pdp.minPieceSizeInBytes)
+  console.log('Max size:', provider.pdp.maxPieceSizeInBytes)
+  console.log('Capabilities:', provider.pdp.capabilities)
+}
+```
+
+### Get Provider by Address
+
+```typescript
+const providerId = await SP.getProviderIdByAddress(client, {
+  providerAddress: '0x1234...',
+})
+
+if (providerId !== 0n) {
+  const provider = await SP.getPDPProvider(client, { providerId })
+}
+```
+
+### Get Multiple Providers
+
+```typescript
+const providers = await SP.getPDPProvidersByIds(client, {
+  providerIds: [1n, 2n, 3n, 4n, 5n],
+})
+
+console.log(`Found ${providers.length} providers`)
+```
+
+### Get All Providers (Paginated)
+
+```typescript
+const result = await SP.getPDPProviders(client, {
+  onlyActive: true,
+  offset: 0n,
+  limit: 50n,
+})
+
+console.log(`Found ${result.providers.length} providers`)
+console.log('Has more:', result.hasMore)
+
+for (const provider of result.providers) {
+  console.log(`${provider.id}: ${provider.name}`)
+}
+```
+
+### Filter by Product Type
+
+```typescript
+const result = await SP.getProvidersByProductType(client, {
+  productType: 'PDP',
+  onlyActive: true,
+  offset: 0n,
+  limit: 50n,
+})
+
+for (const provider of result.providers) {
+  console.log(`${provider.name}: ${provider.product.pdp?.serviceURL}`)
+}
+```
+
+## Provider Status
+
+### Check if Active
+
+```typescript
+const isActive = await SP.isProviderActive(client, { 
+  providerId: 1n 
+})
+
+console.log('Provider is active:', isActive)
+```
+
+### Check if Registered
+
+```typescript
+const isRegistered = await SP.isRegisteredProvider(client, {
+  provider: '0x1234...',
+})
+
+console.log('Address is registered:', isRegistered)
+```
+
+### Get Provider Count
+
+```typescript
+const totalCount = await SP.getProviderCount(client)
+const activeCount = await SP.activeProviderCount(client)
+
+console.log(`${activeCount} of ${totalCount} providers are active`)
+```
+
+## Capabilities System
+
+Capabilities are key-value metadata:
+
+```typescript
+const capabilities = {
+  // Geographic
+  region: 'us-west',
+  city: 'san-francisco',
+  
+  // Service level
+  tier: 'premium',
+  sla: '99.99',
+  
+  // Features
+  features: 'filbeam-enabled,fast-retrieval',
+  bandwidth: '10Gbps',
+  
+  // Custom
+  organization: 'acme-corp',
+  contact: 'support@example.com',
+}
+
+// Register with capabilities
+const hash = await SP.registerProvider(client, {
+  payee: account.address,
+  name: 'My Provider',
+  description: 'High-performance storage',
+  pdpOffering: {...},
+  capabilities,
+})
+```
+
+### Query by Capabilities
+
+```typescript
+// Get all providers
+const result = await SP.getPDPProviders(client, {
+  onlyActive: true,
+  offset: 0n,
+  limit: 100n,
+})
+
+// Filter by capability
+const premiumProviders = result.providers.filter(p => 
+  p.pdp.capabilities?.tier === 'premium'
+)
+
+const usWestProviders = result.providers.filter(p =>
+  p.pdp.capabilities?.region === 'us-west'
+)
+```
+
+## Events
+
+### ProviderRegistered
+
+```solidity
+event ProviderRegistered(
+    uint256 indexed providerId,
+    address indexed serviceProvider,
+    string name
+);
+```
+
+### ProviderUpdated
+
+```solidity
+event ProviderUpdated(
+    uint256 indexed providerId,
+    string name,
+    string description
+);
+```
+
+### ProductAdded
+
+```solidity
+event ProductAdded(
+    uint256 indexed providerId,
+    ProductType indexed productType
+);
+```
+
+### Listen for Events
+
+```typescript
+import { watchContractEvent } from 'viem/actions'
+
+const unwatch = watchContractEvent(client, {
+  address: calibration.contracts.spRegistry.address,
+  abi: calibration.contracts.spRegistry.abi,
+  eventName: 'ProviderRegistered',
+  onLogs: (logs) => {
+    for (const log of logs) {
+      console.log('New provider registered:')
+      console.log('  ID:', log.args.providerId)
+      console.log('  Address:', log.args.serviceProvider)
+      console.log('  Name:', log.args.name)
+    }
+  },
+})
+```
+
+## Integration with Storage
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = await Synapse.create({ privateKey, rpcUrl })
+
+// Get provider info from registry
+const providers = await synapse.spRegistry.getAllActiveProviders()
+
+// Filter for specific capabilities
+const premiumProviders = providers.filter(p =>
+  p.pdp.capabilities?.tier === 'premium'
+)
+
+// Use in storage operation
+const result = await synapse.storage.upload(data, {
+  providerIds: premiumProviders.slice(0, 2).map(p => p.id),
+})
+```
+
+## Provider Discovery
+
+### Find by Region
+
+```typescript
+function findProvidersByRegion(region: string) {
+  return providers.filter(p => 
+    p.active && p.pdp.capabilities?.region === region
+  )
+}
+
+const usProviders = findProvidersByRegion('us-west')
+const euProviders = findProvidersByRegion('eu-west')
+```
+
+### Find by Feature
+
+```typescript
+function hasFeature(provider: Provider, feature: string): boolean {
+  const features = provider.pdp.capabilities?.features || ''
+  return features.split(',').includes(feature)
+}
+
+const cdnProviders = providers.filter(p => 
+  hasFeature(p, 'filbeam-enabled')
+)
+```
+
+### Find by Size Requirements
+
+```typescript
+function supportsSize(provider: Provider, size: bigint): boolean {
+  return (
+    size >= provider.pdp.minPieceSizeInBytes &&
+    size <= provider.pdp.maxPieceSizeInBytes
+  )
+}
+
+const fileSize = 1024n * 1024n * 100n // 100 MB
+const compatibleProviders = providers.filter(p => 
+  supportsSize(p, fileSize)
+)
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Capabilities" icon="tags">
+    Add rich metadata via capabilities for discovery
+  </Card>
+  <Card title="Keep Updated" icon="rotate">
+    Update provider info when services change
+  </Card>
+  <Card title="Set Accurate Limits" icon="ruler">
+    Configure realistic min/max piece sizes
+  </Card>
+  <Card title="Monitor Status" icon="signal">
+    Track active/inactive status changes
+  </Card>
+</CardGroup>
+
+## Source Code
+
+<Card title="SP Registry Contract" href="https://github.com/FilOzone/filecoin-services/blob/main/service_contracts/src/ServiceProviderRegistry.sol" icon="github">
+  View the ServiceProviderRegistry contract source
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Provider Registry Guide" href="/guides/provider-registry" icon="list">
+    Use the registry in your app
+  </Card>
+  <Card title="FWSS Contract" href="/contracts/warm-storage" icon="hard-drive">
+    Learn how FWSS uses the registry
+  </Card>
+</CardGroup>

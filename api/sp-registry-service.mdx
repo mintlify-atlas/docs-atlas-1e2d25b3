@@ -1,0 +1,425 @@
+---
+title: 'SPRegistryService'
+description: 'Query and manage service provider registrations'
+---
+
+## Overview
+
+The `SPRegistryService` provides access to the ServiceProviderRegistry contract for discovering providers, querying their offerings, and managing provider registrations.
+
+Access via `synapse.providers`.
+
+## Provider Queries
+
+### `getProvider()`
+
+Get information about a specific provider by ID.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="providerId" type="bigint" required>
+      Provider ID to query
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="provider" type="PDPProvider | null">
+  Provider information or null if not found:
+  - `id` - Provider ID
+  - `serviceProvider` - Provider address
+  - `name` - Provider name
+  - `description` - Provider description
+  - `pdp` - PDP service offering details
+  - `capabilities` - Provider capabilities
+</ResponseField>
+
+```typescript
+const provider = await synapse.providers.getProvider({ 
+  providerId: 1n 
+})
+
+if (provider) {
+  console.log('Name:', provider.name)
+  console.log('PDP URL:', provider.pdp.serviceURL)
+  console.log('Min size:', provider.pdp.minPieceSizeInBytes)
+  console.log('Max size:', provider.pdp.maxPieceSizeInBytes)
+}
+```
+
+### `getProviderByAddress()`
+
+Get provider information by their service address.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="address" type="Address" required>
+      Provider's service address
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="provider" type="PDPProvider | null">
+  Provider information or null if not found
+</ResponseField>
+
+```typescript
+const provider = await synapse.providers.getProviderByAddress({
+  address: '0x...'
+})
+```
+
+### `getProviders()`
+
+Get multiple providers by their IDs.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="providerIds" type="bigint[]" required>
+      Array of provider IDs to query
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="providers" type="PDPProvider[]">
+  Array of provider information (skips providers not found)
+</ResponseField>
+
+```typescript
+const providers = await synapse.providers.getProviders({
+  providerIds: [1n, 2n, 3n]
+})
+
+providers.forEach(p => {
+  console.log(`Provider ${p.id}: ${p.name}`)
+})
+```
+
+### `getAllActiveProviders()`
+
+Get all currently active providers.
+
+<ResponseField name="providers" type="PDPProvider[]">
+  Array of all active providers
+</ResponseField>
+
+```typescript
+const allProviders = await synapse.providers.getAllActiveProviders()
+
+console.log('Total providers:', allProviders.length)
+
+allProviders.forEach(p => {
+  console.log(`${p.name} (ID: ${p.id})`) 
+  console.log(`  URL: ${p.pdp.serviceURL}`)
+  console.log(`  Capacity: ${p.pdp.minPieceSizeInBytes} - ${p.pdp.maxPieceSizeInBytes} bytes`)
+})
+```
+
+## Provider Registration
+
+<Warning>
+**Provider Registration is for Storage Providers**
+
+These methods are only needed if you're operating a storage provider service. Regular users uploading data don't need to register.
+</Warning>
+
+### `registerProvider()`
+
+Register as a new service provider.
+
+<ParamField path="options" type="ProviderRegistrationInfo" required>
+  Provider registration information
+  
+  <Expandable title="properties">
+    <ParamField path="payee" type="Address" required>
+      Address that will receive payments
+    </ParamField>
+    
+    <ParamField path="name" type="string" required>
+      Provider name
+    </ParamField>
+    
+    <ParamField path="description" type="string" required>
+      Provider description
+    </ParamField>
+    
+    <ParamField path="pdpOffering" type="PDPOffering" required>
+      PDP service offering details
+      
+      <Expandable title="PDP fields">
+        <ParamField path="serviceURL" type="string" required>
+          PDP service endpoint URL
+        </ParamField>
+        
+        <ParamField path="minPieceSizeInBytes" type="bigint" required>
+          Minimum piece size accepted
+        </ParamField>
+        
+        <ParamField path="maxPieceSizeInBytes" type="bigint" required>
+          Maximum piece size accepted
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField path="capabilities" type="Record<string, string>">
+      Optional capability metadata
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash of the registration
+</ResponseField>
+
+```typescript
+import { SIZE_CONSTANTS } from '@filoz/synapse-sdk/utils'
+
+const txHash = await synapse.providers.registerProvider({
+  payee: '0x...', // Payment recipient address
+  name: 'My Storage Provider',
+  description: 'High-performance Filecoin storage with 99.9% uptime',
+  pdpOffering: {
+    serviceURL: 'https://pdp.myprovider.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 32n,
+  },
+  capabilities: {
+    region: 'us-east-1',
+    tier: 'premium',
+    maxBandwidth: '10Gbps'
+  }
+})
+
+console.log('Registration tx:', txHash)
+```
+
+### `updateProviderInfo()`
+
+Update provider name and description.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      New provider name
+    </ParamField>
+    
+    <ParamField path="description" type="string" required>
+      New provider description
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.providers.updateProviderInfo({
+  name: 'My Updated Provider Name',
+  description: 'Updated service description with new features'
+})
+```
+
+### `removeProvider()`
+
+Remove provider registration.
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.providers.removeProvider()
+console.log('Provider removed:', txHash)
+```
+
+## Product Management
+
+### `addProduct()`
+
+Add a new product offering to your provider.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="productType" type="ProductType" required>
+      Type of product (e.g., 'PDP')
+    </ParamField>
+    
+    <ParamField path="productData" type="PDPOffering" required>
+      Product-specific data
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.providers.addProduct({
+  productType: 'PDP',
+  productData: {
+    serviceURL: 'https://pdp2.myprovider.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 64n,
+  }
+})
+```
+
+### `updateProduct()`
+
+Update an existing product offering.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="productIndex" type="number" required>
+      Index of product to update
+    </ParamField>
+    
+    <ParamField path="productType" type="ProductType" required>
+      Product type
+    </ParamField>
+    
+    <ParamField path="productData" type="PDPOffering" required>
+      Updated product data
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.providers.updateProduct({
+  productIndex: 0,
+  productType: 'PDP',
+  productData: {
+    serviceURL: 'https://pdp-updated.myprovider.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB * 4n,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 128n,
+  }
+})
+```
+
+### `removeProduct()`
+
+Remove a product offering.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="productIndex" type="number" required>
+      Index of product to remove
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.providers.removeProduct({
+  productIndex: 0
+})
+```
+
+## Complete Example: User Finding Providers
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { formatUnits } from 'viem'
+
+const synapse = Synapse.create({ account, chain })
+
+// Get all available providers
+const providers = await synapse.providers.getAllActiveProviders()
+
+console.log(`Found ${providers.length} active providers`)
+
+// Filter by capabilities
+const regionalProviders = providers.filter(p => {
+  const region = p.capabilities?.region
+  return region === 'us-east-1' || region === 'us-west-2'
+})
+
+console.log(`${regionalProviders.length} providers in US regions`)
+
+// Check provider details
+for (const provider of regionalProviders) {
+  console.log(`\n${provider.name} (ID: ${provider.id})`)
+  console.log(`  Description: ${provider.description}`)
+  console.log(`  Service URL: ${provider.pdp.serviceURL}`)
+  console.log(`  Min/Max size: ${provider.pdp.minPieceSizeInBytes} - ${provider.pdp.maxPieceSizeInBytes} bytes`)
+  
+  if (provider.capabilities) {
+    console.log('  Capabilities:')
+    Object.entries(provider.capabilities).forEach(([key, value]) => {
+      console.log(`    ${key}: ${value}`)
+    })
+  }
+}
+
+// Get specific provider info
+const provider = await synapse.providers.getProvider({ 
+  providerId: 1n 
+})
+
+if (provider) {
+  // Use this provider for storage
+  const context = await synapse.storage.createContext({
+    providerId: provider.id
+  })
+  
+  const result = await context.upload(data)
+  console.log('Uploaded to:', provider.name)
+}
+```
+
+## Complete Example: Provider Registration
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { SIZE_CONSTANTS } from '@filoz/synapse-sdk/utils'
+import { privateKeyToAccount } from 'viem/accounts'
+
+const account = privateKeyToAccount(process.env.PROVIDER_PRIVATE_KEY)
+const synapse = Synapse.create({ account, chain })
+
+// Register as a storage provider
+const registrationTx = await synapse.providers.registerProvider({
+  payee: account.address, // Where payments go
+  name: 'Acme Storage Provider',
+  description: 'Enterprise-grade Filecoin storage with SLA guarantees',
+  pdpOffering: {
+    serviceURL: 'https://pdp.acmestorage.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB * 4n,      // 4 KiB min
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 32n,     // 32 GiB max
+  },
+  capabilities: {
+    region: 'us-east-1',
+    tier: 'enterprise',
+    uptime: '99.99%',
+    bandwidth: '10Gbps',
+    storage: '5PB'
+  }
+})
+
+console.log('Registered! Tx:', registrationTx)
+
+// Find your provider ID from the transaction logs
+// (Implementation would parse the ProviderRegistered event)
+
+// Later, update your info
+const updateTx = await synapse.providers.updateProviderInfo({
+  name: 'Acme Storage Provider (Enhanced)',
+  description: 'Enterprise-grade storage with new CDN integration'
+})
+
+console.log('Info updated:', updateTx)
+```
+
+## See Also
+
+- [Provider Discovery](/guides/provider-registry) - Finding providers
+- [ServiceProviderRegistry Contract](https://github.com/FilOzone/filecoin-services) - Contract source
+- [StorageContext](/api/storage-context) - Using specific providers

@@ -1,0 +1,320 @@
+---
+title: Provider Registry
+description: Query and manage storage providers on Filecoin Onchain Cloud
+---
+
+## Overview
+
+The Service Provider Registry manages all storage providers in the Filecoin Onchain Cloud ecosystem. Use it to discover providers, check their status, and query capabilities.
+
+## Query Providers
+
+<Steps>
+
+### Get All Active Providers
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = await Synapse.create({ privateKey, rpcUrl })
+
+// Get all active providers (handles pagination)
+const providers = await synapse.spRegistry.getAllActiveProviders()
+
+for (const provider of providers) {
+  console.log(`Provider ${provider.id}: ${provider.name}`)
+  console.log(`  Address: ${provider.serviceProvider}`)
+  console.log(`  Description: ${provider.description}`)
+  console.log(`  PDP URL: ${provider.pdp.serviceURL}`)
+}
+```
+
+### Get Provider by ID
+
+```typescript
+const provider = await synapse.spRegistry.getProvider({ 
+  providerId: 1n 
+})
+
+if (provider) {
+  console.log('Name:', provider.name)
+  console.log('Active:', provider.active)
+  console.log('Service URL:', provider.pdp.serviceURL)
+} else {
+  console.log('Provider not found')
+}
+```
+
+### Get Provider by Address
+
+```typescript
+const provider = await synapse.spRegistry.getProviderByAddress({
+  address: '0x1234...',
+})
+```
+
+### Get Multiple Providers
+
+```typescript
+const providers = await synapse.spRegistry.getProviders({
+  providerIds: [1n, 2n, 3n, 4n],
+})
+
+console.log(`Found ${providers.length} providers`)
+```
+
+</Steps>
+
+## Provider Status
+
+### Check if Provider is Active
+
+```typescript
+const isActive = await synapse.spRegistry.isProviderActive({ 
+  providerId: 1n 
+})
+
+if (isActive) {
+  console.log('Provider is accepting new data')
+}
+```
+
+### Check if Address is Registered
+
+```typescript
+const isRegistered = await synapse.spRegistry.isRegisteredProvider({
+  address: '0x1234...',
+})
+```
+
+### Get Provider Counts
+
+```typescript
+const totalCount = await synapse.spRegistry.getProviderCount()
+const activeCount = await synapse.spRegistry.activeProviderCount()
+
+console.log(`${activeCount} of ${totalCount} providers are active`)
+```
+
+## Provider Details
+
+### PDP Offerings
+
+Every provider has a PDP (Proof of Data Possession) offering:
+
+```typescript
+const provider = await synapse.spRegistry.getProvider({ providerId: 1n })
+
+console.log('PDP Offering:')
+console.log('  Service URL:', provider.pdp.serviceURL)
+console.log('  Min piece size:', provider.pdp.minPieceSizeInBytes)
+console.log('  Max piece size:', provider.pdp.maxPieceSizeInBytes)
+console.log('  Chain ID:', provider.pdp.chainId)
+console.log('  Verifier address:', provider.pdp.verifierAddr)
+```
+
+### Capabilities
+
+Providers can have custom capabilities (key-value metadata):
+
+```typescript
+const provider = await synapse.spRegistry.getProvider({ providerId: 1n })
+
+if (provider.pdp.capabilities) {
+  console.log('Capabilities:')
+  for (const [key, value] of Object.entries(provider.pdp.capabilities)) {
+    console.log(`  ${key}: ${value}`)
+  }
+}
+
+// Example capabilities:
+// region: "us-east"
+// tier: "premium"
+// features: "filbeam-enabled"
+```
+
+## Filter by Product Type
+
+```typescript
+const providers = await synapse.spRegistry.getActiveProvidersByProductType({
+  productType: 'PDP',
+})
+
+console.log(`Found ${providers.length} PDP providers`)
+
+for (const provider of providers) {
+  console.log(`${provider.name}: ${provider.product.pdp?.serviceURL}`)
+}
+```
+
+## Storage Info
+
+Get comprehensive storage service information:
+
+```typescript
+const info = await synapse.storage.getStorageInfo()
+
+// Approved providers
+console.log('Approved providers:', info.providers.length)
+
+// Pricing
+console.log('Price per TiB per month:', info.pricing.noCDN.perTiBPerMonth)
+console.log('Token:', info.pricing.tokenSymbol)
+
+// Service parameters
+console.log('Epoch duration:', info.serviceParameters.epochDuration)
+console.log('Max upload size:', info.serviceParameters.maxUploadSize)
+
+// Allowances (if wallet connected)
+if (info.allowances) {
+  console.log('Operator approved:', info.allowances.isApproved)
+  console.log('Rate allowance:', info.allowances.rateAllowance)
+}
+```
+
+## Provider Management
+
+<Note>
+  These operations require you to be a registered provider.
+</Note>
+
+### Register as Provider
+
+```typescript
+import { SIZE_CONSTANTS } from '@filoz/synapse-sdk'
+
+const hash = await synapse.spRegistry.registerProvider({
+  payee: account.address,
+  name: 'My Storage Provider',
+  description: 'Fast and reliable Filecoin storage',
+  pdpOffering: {
+    serviceURL: 'https://storage.example.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 32n,
+    chainId: calibration.id,
+    verifierAddr: calibration.contracts.pdpVerifier.address,
+  },
+  capabilities: {
+    region: 'us-west',
+    tier: 'standard',
+  },
+})
+
+await synapse.client.waitForTransactionReceipt({ hash })
+```
+
+### Update Provider Info
+
+```typescript
+const hash = await synapse.spRegistry.updateProviderInfo({
+  name: 'Updated Provider Name',
+  description: 'New improved service',
+})
+```
+
+### Add/Update PDP Product
+
+```typescript
+const hash = await synapse.spRegistry.updatePDPProduct({
+  pdpOffering: {
+    serviceURL: 'https://new-url.example.com',
+    minPieceSizeInBytes: SIZE_CONSTANTS.KiB,
+    maxPieceSizeInBytes: SIZE_CONSTANTS.GiB * 64n,
+    chainId: calibration.id,
+    verifierAddr: calibration.contracts.pdpVerifier.address,
+  },
+  capabilities: {
+    region: 'us-west',
+    tier: 'premium',
+    sla: '99.9',
+  },
+})
+```
+
+### Remove Provider
+
+```typescript
+const hash = await synapse.spRegistry.removeProvider()
+await synapse.client.waitForTransactionReceipt({ hash })
+```
+
+## Using with Storage Manager
+
+Provider IDs from the registry can be used with storage operations:
+
+```typescript
+// Get endorsed providers
+const providers = await synapse.spRegistry.getAllActiveProviders()
+const endorsedIds = providers
+  .filter(p => p.endorsed)
+  .map(p => p.id)
+
+// Upload to specific providers
+const result = await synapse.storage.upload(data, {
+  providerIds: endorsedIds.slice(0, 2), // Use first 2 endorsed
+})
+```
+
+## Provider ID Mapping
+
+```typescript
+// Get provider ID from address
+const providerId = await synapse.spRegistry.getProviderIdByAddress({
+  address: '0x1234...',
+})
+
+if (providerId === 0n) {
+  console.log('Address is not a registered provider')
+} else {
+  console.log(`Provider ID: ${providerId}`)
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Cache Provider Lists" icon="database">
+    Cache provider lists to reduce RPC calls
+  </Card>
+  <Card title="Check Active Status" icon="circle-check">
+    Always verify provider is active before using
+  </Card>
+  <Card title="Use Endorsed Providers" icon="award">
+    Prefer endorsed providers for better reliability
+  </Card>
+  <Card title="Monitor Capabilities" icon="list-check">
+    Check provider capabilities match your needs
+  </Card>
+</CardGroup>
+
+## Low-Level Access
+
+For advanced use cases, use synapse-core directly:
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp-registry'
+import { createPublicClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const client = createPublicClient({
+  chain: calibration,
+  transport: http(),
+})
+
+const providers = await SP.getPDPProviders(client, {
+  onlyActive: true,
+  offset: 0n,
+  limit: 50n,
+})
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Storage Operations" href="/guides/storage-operations" icon="hard-drive">
+    Use providers for storage operations
+  </Card>
+  <Card title="SP Registry Contract" href="/contracts/sp-registry" icon="file-contract">
+    Learn about the registry contract
+  </Card>
+</CardGroup>

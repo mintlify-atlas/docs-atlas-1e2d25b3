@@ -1,80 +1,265 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with Synapse SDK in 5 minutes
 ---
 
-## Get started in three steps
+# Quickstart Guide
 
-Get your documentation site running locally and make your first customization.
+Get up and running with Synapse SDK in just a few minutes. This guide walks you through your first upload and download on Filecoin Onchain Cloud.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+<Steps>
+  <Step title="Node.js 18+">
+    Ensure you have Node.js 18 or later installed:
+    ```bash
+    node --version
+    ```
+  </Step>
+  
+  <Step title="Wallet with Private Key">
+    You'll need a Filecoin wallet with a private key. For testnet, you can create one using:
+    ```typescript
+    import { privateKeyToAccount } from 'viem/accounts'
+    import { generatePrivateKey } from 'viem/accounts'
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    const privateKey = generatePrivateKey()
+    const account = privateKeyToAccount(privateKey)
+    console.log('Address:', account.address)
+    console.log('Private key:', privateKey)
+    ```
+  </Step>
+  
+  <Step title="Test Funds (Calibration)">
+    For calibration testnet, get free test FIL and USDFC:
+    - FIL faucet: https://faucet.calibration.fildev.network/
+    - USDFC: Contact the FilOzone team or use the Synapse Playground
+  </Step>
+</Steps>
 
-### Step 2: Deploy your changes
+## Installation
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Install the Synapse SDK:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<CodeGroup>
+```bash npm
+npm install @filoz/synapse-sdk
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash pnpm
+pnpm add @filoz/synapse-sdk
+```
 
-### Step 3: Go live
+```bash yarn
+yarn add @filoz/synapse-sdk
+```
+</CodeGroup>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+## Your First Upload
 
-## Next steps
+Create a file called `upload.ts` (or `upload.js` for JavaScript):
 
-Now that you have your docs running, explore these key features:
+```typescript upload.ts
+import { Synapse } from '@filoz/synapse-sdk'
+import { calibration } from '@filoz/synapse-core/chains'
+import { http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 
-<CardGroup cols={2}>
+async function main() {
+  // 1. Create your account from private key
+  const account = privateKeyToAccount('0x...' as `0x${string}`)
+  
+  // 2. Initialize Synapse
+  const synapse = Synapse.create({
+    chain: calibration,
+    transport: http(),
+    account,
+  })
+  
+  console.log('Connected to:', synapse.chain.name)
+  console.log('Wallet:', account.address)
+  
+  // 3. Check your balances
+  const usdfc = await synapse.payments.walletBalance({ token: 'USDFC' })
+  console.log('USDFC balance:', Number(usdfc) / 1e18)
+  
+  // 4. Ensure you have operator approval (one-time setup)
+  const approval = await synapse.payments.serviceApproval()
+  if (!approval.isApproved) {
+    console.log('Setting up operator approval...')
+    await synapse.payments.setOperatorApproval({
+      operator: synapse.chain.contracts.fwss.address,
+      approved: true,
+    })
+  }
+  
+  // 5. Upload some data
+  console.log('\nUploading data...')
+  const data = new TextEncoder().encode('Hello from Filecoin Onchain Cloud!')
+  
+  const result = await synapse.storage.upload(data, {
+    callbacks: {
+      onProviderSelected: (provider) => {
+        console.log('Selected provider:', provider.id)
+      },
+      onStored: (providerId, pieceCid) => {
+        console.log(`Stored on provider ${providerId}:`, pieceCid)
+      },
+      onPiecesConfirmed: (dataSetId, providerId) => {
+        console.log(`Confirmed on-chain: dataset ${dataSetId}, provider ${providerId}`)
+      },
+    },
+  })
+  
+  console.log('\n✅ Upload complete!')
+  console.log('PieceCID:', result.pieceCid)
+  console.log('Size:', result.size, 'bytes')
+  console.log('Copies:', result.copies.length)
+  
+  for (const copy of result.copies) {
+    console.log(`  - Provider ${copy.providerId} (${copy.role}): dataset ${copy.dataSetId}, piece ${copy.pieceId}`)
+  }
+  
+  // 6. Download and verify
+  console.log('\nDownloading data...')
+  const retrieved = await synapse.storage.download({ 
+    pieceCid: result.pieceCid 
+  })
+  
+  const text = new TextDecoder().decode(retrieved)
+  console.log('Retrieved:', text)
+  console.log('\n✅ Round-trip successful!')
+}
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+main().catch(console.error)
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  Replace `'0x...'` with your actual private key. Never commit private keys to version control!
 </Note>
+
+## Run Your Code
+
+<Tabs>
+  <Tab title="TypeScript">
+    Run with Node.js (requires TypeScript compilation or a tool like tsx):
+    ```bash
+    node --loader ts-node/esm upload.ts
+    ```
+    
+    Or compile first:
+    ```bash
+    tsc upload.ts
+    node upload.js
+    ```
+  </Tab>
+  
+  <Tab title="JavaScript">
+    Run directly with Node.js:
+    ```bash
+    node upload.js
+    ```
+  </Tab>
+</Tabs>
+
+## Expected Output
+
+```text
+Connected to: Filecoin Calibration
+Wallet: 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+USDFC balance: 100.0
+
+Uploading data...
+Selected provider: 123
+Stored on provider 123: baga6ea4seaqao7s73y24roe...
+Stored on provider 456: baga6ea4seaqao7s73y24roe...
+Confirmed on-chain: dataset 789, provider 123
+Confirmed on-chain: dataset 790, provider 456
+
+✅ Upload complete!
+PieceCID: baga6ea4seaqao7s73y24roe...
+Size: 35 bytes
+Copies: 2
+  - Provider 123 (primary): dataset 789, piece 1
+  - Provider 456 (secondary): dataset 790, piece 1
+
+Downloading data...
+Retrieved: Hello from Filecoin Onchain Cloud!
+
+✅ Round-trip successful!
+```
+
+## Understanding What Happened
+
+<Steps>
+  <Step title="Provider Selection">
+    The SDK automatically selected 2 storage providers: one endorsed provider as the primary, and one approved provider as the secondary.
+  </Step>
+  
+  <Step title="Store on Primary">
+    Your data was uploaded to the primary provider and converted to a PieceCID (Content Identifier for Filecoin pieces).
+  </Step>
+  
+  <Step title="Pull to Secondary">
+    The secondary provider fetched the data directly from the primary provider (SP-to-SP transfer), eliminating the need to upload twice.
+  </Step>
+  
+  <Step title="Commit On-Chain">
+    Both providers registered the piece with the PDPVerifier contract, creating provable on-chain records and starting PDP verification.
+  </Step>
+  
+  <Step title="Download">
+    The SDK fetched your data back from one of the providers, verified the PieceCID, and returned the bytes.
+  </Step>
+</Steps>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Insufficient USDFC balance">
+    You need USDFC tokens to pay for storage. For calibration testnet:
+    1. Contact the FilOzone team for test USDFC
+    2. Or use the Synapse Playground to get tokens
+    
+    Check your balance:
+    ```typescript
+    const balance = await synapse.payments.walletBalance({ token: 'USDFC' })
+    console.log('USDFC:', Number(balance) / 1e18)
+    ```
+  </Accordion>
+  
+  <Accordion title="Operator not approved">
+    The first time you use the SDK, you need to approve the Warm Storage service as an operator:
+    ```typescript
+    await synapse.payments.setOperatorApproval({
+      operator: synapse.chain.contracts.fwss.address,
+      approved: true,
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Transaction timeout">
+    Filecoin has a 30-second block time. If transactions seem slow, this is normal. Wait at least 60 seconds before assuming failure.
+  </Accordion>
+  
+  <Accordion title="'Transport must be custom' error">
+    If using a JSON-RPC account (from browser wallet), you must provide a custom transport. See the [Browser Integration guide](/examples/browser-integration).
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Learn how the storage pipeline works under the hood
+  </Card>
+  <Card title="Storage Operations" icon="database" href="/guides/storage-operations">
+    Explore advanced upload options and split operations
+  </Card>
+  <Card title="Payment Management" icon="wallet" href="/guides/payment-management">
+    Manage deposits, withdrawals, and payment rails
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/upload-download">
+    See more complete examples and use cases
+  </Card>
+</CardGroup>

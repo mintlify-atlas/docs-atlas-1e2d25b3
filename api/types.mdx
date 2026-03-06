@@ -1,0 +1,412 @@
+---
+title: 'Types'
+description: 'TypeScript type definitions for Synapse SDK'
+---
+
+## Overview
+
+The Synapse SDK is fully typed with TypeScript. This page documents key types used throughout the SDK.
+
+## Core Types
+
+### `PieceCID`
+
+Content identifier for Filecoin pieces.
+
+```typescript
+import type { PieceCID } from '@filoz/synapse-sdk'
+import * as Piece from '@filoz/synapse-core/piece'
+
+const pieceCid: PieceCID = Piece.calculate(data)
+console.log(pieceCid.toString()) // baga6ea4seaq...
+```
+
+### `Address`
+
+Ethereum/Filecoin address (from Viem).
+
+```typescript
+import type { Address } from 'viem'
+
+const address: Address = '0x...'
+```
+
+### `Hash`
+
+Transaction hash (from Viem).
+
+```typescript
+import type { Hash } from 'viem'
+
+const txHash: Hash = '0x...'
+```
+
+## Storage Types
+
+### `UploadResult`
+
+Result of a storage upload operation.
+
+```typescript
+interface UploadResult {
+  pieceCid: PieceCID
+  size: number
+  copies: CopyResult[]
+  failures: FailedCopy[]
+}
+```
+
+### `CopyResult`
+
+Information about a successful copy.
+
+```typescript
+interface CopyResult {
+  providerId: bigint
+  dataSetId: bigint
+  pieceId: bigint
+  role: 'primary' | 'secondary'
+  retrievalUrl: string
+  isNewDataSet: boolean
+}
+```
+
+### `FailedCopy`
+
+Information about a failed copy attempt.
+
+```typescript
+interface FailedCopy {
+  providerId: bigint
+  role: 'primary' | 'secondary'
+  error: string
+  explicit: boolean
+}
+```
+
+### `StoreResult`
+
+Result of a store operation.
+
+```typescript
+interface StoreResult {
+  pieceCid: PieceCID
+  size: number
+}
+```
+
+### `CommitResult`
+
+Result of a commit operation.
+
+```typescript
+interface CommitResult {
+  txHash: Hash
+  pieceIds: bigint[]
+  dataSetId: bigint
+  isNewDataSet: boolean
+}
+```
+
+### `PullResult`
+
+Result of a pull operation.
+
+```typescript
+interface PullResult {
+  status: 'complete' | 'failed'
+  pieces: Array<{
+    pieceCid: PieceCID
+    status: 'complete' | 'failed'
+  }>
+}
+```
+
+## Data Set Types
+
+### `DataSetInfo`
+
+Basic data set information from contract.
+
+```typescript
+interface DataSetInfo {
+  pdpRailId: bigint
+  cacheMissRailId: bigint
+  cdnRailId: bigint
+  payer: Address
+  payee: Address
+  serviceProvider: Address
+  commissionBps: bigint
+  clientDataSetId: bigint
+  pdpEndEpoch: bigint
+  providerId: bigint
+  dataSetId: bigint
+}
+```
+
+### `EnhancedDataSetInfo`
+
+Enhanced data set information with additional details.
+
+```typescript
+interface EnhancedDataSetInfo extends DataSetInfo {
+  pdpVerifierDataSetId: bigint
+  activePieceCount: bigint
+  isLive: boolean
+  isManaged: boolean
+  withCDN: boolean
+  metadata: Record<string, string>
+}
+```
+
+## Provider Types
+
+### `PDPProvider`
+
+Service provider information.
+
+```typescript
+interface PDPProvider {
+  id: bigint
+  serviceProvider: Address
+  name: string
+  description: string
+  pdp: {
+    serviceURL: string
+    minPieceSizeInBytes: bigint
+    maxPieceSizeInBytes: bigint
+  }
+  capabilities?: Record<string, string>
+}
+```
+
+## Callback Types
+
+### `UploadCallbacks`
+
+Callbacks for upload progress.
+
+```typescript
+interface UploadCallbacks {
+  onProgress?: (bytesUploaded: number) => void
+  onStored?: (providerId: bigint, pieceCid: PieceCID) => void
+  onPiecesAdded?: (txHash: Hash, providerId: bigint, pieces: { pieceCid: PieceCID }[]) => void
+  onPiecesConfirmed?: (dataSetId: bigint, providerId: bigint, pieces: PieceRecord[]) => void
+  onCopyComplete?: (providerId: bigint, pieceCid: PieceCID) => void
+  onCopyFailed?: (providerId: bigint, pieceCid: PieceCID, error: Error) => void
+  onPullProgress?: (providerId: bigint, pieceCid: PieceCID, status: PullStatus) => void
+}
+```
+
+### `StorageContextCallbacks`
+
+Callbacks for context creation.
+
+```typescript
+interface StorageContextCallbacks {
+  onProviderSelected?: (provider: PDPProvider) => void
+  onDataSetResolved?: (info: { dataSetId: bigint; provider: PDPProvider }) => void
+}
+```
+
+## Options Types
+
+### `SynapseOptions`
+
+Options for creating a Synapse instance.
+
+```typescript
+interface SynapseOptions {
+  transport?: Transport
+  chain?: Chain
+  account: Account | Address
+  sessionKey?: SessionKey<'Secp256k1'>
+  withCDN?: boolean
+}
+```
+
+### `CreateContextsOptions`
+
+Options for creating multiple contexts.
+
+```typescript
+interface CreateContextsOptions {
+  count?: number
+  dataSetIds?: bigint[]
+  providerIds?: bigint[]
+  excludeProviderIds?: bigint[]
+  withCDN?: boolean
+  metadata?: Record<string, string>
+  callbacks?: StorageContextCallbacks
+}
+```
+
+### `StorageManagerUploadOptions`
+
+Options for StorageManager upload.
+
+```typescript
+interface StorageManagerUploadOptions extends CreateContextsOptions {
+  contexts?: StorageContext[]
+  callbacks?: Partial<CombinedCallbacks>
+  pieceCid?: PieceCID
+  signal?: AbortSignal
+  pieceMetadata?: Record<string, string>
+}
+```
+
+## Metadata Types
+
+### `MetadataObject`
+
+User-facing metadata format.
+
+```typescript
+type MetadataObject = Record<string, string>
+
+const metadata: MetadataObject = {
+  category: 'videos',
+  project: 'alpha'
+}
+```
+
+### `MetadataEntry`
+
+Internal metadata format for EIP-712.
+
+```typescript
+interface MetadataEntry {
+  key: string
+  value: string
+}
+
+const entries: MetadataEntry[] = [
+  { key: 'category', value: 'videos' },
+  { key: 'project', value: 'alpha' }
+]
+```
+
+## Payment Types
+
+### `RailInfo`
+
+Payment rail information.
+
+```typescript
+interface RailInfo {
+  railId: bigint
+  payer: Address
+  payee: Address
+  rate: bigint
+  lockup: bigint
+  // ... other fields
+}
+```
+
+### `SettlementResult`
+
+Payment settlement result.
+
+```typescript
+interface SettlementResult {
+  totalSettledAmount: bigint
+  totalNetPayeeAmount: bigint
+  totalOperatorCommission: bigint
+  totalNetworkFee: bigint
+  finalSettledEpoch: bigint
+  note: string
+}
+```
+
+## Service Info Types
+
+### `StorageInfo`
+
+Comprehensive storage service information.
+
+```typescript
+interface StorageInfo {
+  pricing: {
+    noCDN: {
+      perTiBPerMonth: bigint
+      perTiBPerDay: bigint
+      perTiBPerEpoch: bigint
+    }
+    withCDN: {
+      perTiBPerMonth: bigint
+      perTiBPerDay: bigint
+      perTiBPerEpoch: bigint
+    }
+    tokenAddress: Address
+    tokenSymbol: string
+  }
+  providers: PDPProvider[]
+  serviceParameters: {
+    epochsPerMonth: bigint
+    epochsPerDay: bigint
+    epochDuration: number
+    minUploadSize: number
+    maxUploadSize: number
+  }
+  allowances: {
+    isApproved: boolean
+    service: Address
+    rateAllowance: bigint
+    lockupAllowance: bigint
+    rateUsed: bigint
+    lockupUsed: bigint
+  } | null
+}
+```
+
+### `PreflightInfo`
+
+Preflight check results.
+
+```typescript
+interface PreflightInfo {
+  estimatedCost: {
+    perEpoch: bigint
+    perDay: bigint
+    perMonth: bigint
+  }
+  allowanceCheck: {
+    sufficient: boolean
+    message?: string
+  }
+  selectedProvider: PDPProvider | null
+  selectedDataSetId: number | null
+}
+```
+
+## Utility Types
+
+### `PullStatus`
+
+Pull operation status.
+
+```typescript
+type PullStatus = 'pending' | 'pulling' | 'complete' | 'failed'
+```
+
+### `TokenIdentifier`
+
+Supported token identifier.
+
+```typescript
+type TokenIdentifier = 'USDFC' | 'FIL'
+```
+
+### `TokenAmount`
+
+Token amount in base units.
+
+```typescript
+type TokenAmount = bigint
+```
+
+## See Also
+
+- [Synapse API](/api/synapse-class) - Main SDK interface
+- [StorageManager](/api/storage-manager) - Storage operations
+- [TypeScript Handbook](https://www.typescriptlang.org/docs/handbook/intro.html) - TypeScript basics

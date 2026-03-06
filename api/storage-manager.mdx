@@ -1,0 +1,427 @@
+---
+title: 'StorageManager'
+description: 'Orchestrate multi-copy uploads and manage storage contexts'
+---
+
+## Overview
+
+The `StorageManager` is the central facade for all storage operations in the Synapse SDK. It manages storage contexts (provider + data set pairs) with intelligent caching and provides both simple auto-managed operations and advanced split-operation workflows.
+
+Access via `synapse.storage`.
+
+## Architecture
+
+```
+StorageManager
+├── Auto-managed uploads (upload, download)
+├── Context management (createContext, createContexts)
+└── Data set operations (findDataSets, terminateDataSet)
+```
+
+## Simple Upload/Download
+
+### `upload()`
+
+Upload data with automatic multi-copy redundancy across providers.
+
+<ParamField path="data" type="Uint8Array | ReadableStream<Uint8Array>" required>
+  Raw bytes or readable stream to upload. Use streams for large files.
+</ParamField>
+
+<ParamField path="options" type="StorageManagerUploadOptions">
+  Upload configuration options
+  
+  <Expandable title="properties">
+    <ParamField path="count" type="number" default="2">
+      Number of provider copies (default: 2 for redundancy)
+    </ParamField>
+    
+    <ParamField path="providerIds" type="bigint[]">
+      Specific provider IDs to use (disables auto-retry on failure)
+    </ParamField>
+    
+    <ParamField path="dataSetIds" type="bigint[]">
+      Specific data set IDs to use (mutually exclusive with providerIds)
+    </ParamField>
+    
+    <ParamField path="contexts" type="StorageContext[]">
+      Pre-created contexts to use (skips context creation)
+    </ParamField>
+    
+    <ParamField path="metadata" type="Record<string, string>">
+      Custom metadata for data set matching
+    </ParamField>
+    
+    <ParamField path="pieceMetadata" type="Record<string, string>">
+      Custom metadata for the piece
+    </ParamField>
+    
+    <ParamField path="pieceCid" type="PieceCID">
+      Pre-calculated PieceCID to skip CommP calculation
+    </ParamField>
+    
+    <ParamField path="signal" type="AbortSignal">
+      Abort signal to cancel the upload
+    </ParamField>
+    
+    <ParamField path="callbacks" type="CombinedCallbacks">
+      Lifecycle callbacks for upload progress
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="UploadResult">
+  Upload result containing:
+  - `pieceCid` - Content identifier
+  - `size` - Data size in bytes
+  - `copies` - Successful provider copies
+  - `failures` - Failed copy attempts
+</ResponseField>
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = Synapse.create({ account, chain })
+
+// Simple upload with 2 copies (default)
+const data = new Uint8Array([1, 2, 3, 4])
+const result = await synapse.storage.upload(data)
+
+console.log('PieceCID:', result.pieceCid.toString())
+console.log('Copies:', result.copies.length)
+result.copies.forEach(copy => {
+  console.log(`Provider ${copy.providerId}: ${copy.role}`)
+})
+
+// With progress tracking
+const result = await synapse.storage.upload(data, {
+  callbacks: {
+    onProgress: (bytes) => console.log(`Uploaded ${bytes} bytes`),
+    onStored: (providerId, pieceCid) => 
+      console.log(`Stored on provider ${providerId}`),
+    onPiecesConfirmed: (dataSetId, providerId) =>
+      console.log(`Confirmed on chain: dataset ${dataSetId}`)
+  }
+})
+
+// Streaming upload for large files
+const fileStream = readableStream // ReadableStream<Uint8Array>
+const result = await synapse.storage.upload(fileStream, {
+  pieceCid: preCalculatedCid // Required for streams
+})
+```
+
+### `download()`
+
+Download data from storage with automatic provider resolution.
+
+<ParamField path="options" type="StorageManagerDownloadOptions" required>
+  Download options
+  
+  <Expandable title="properties">
+    <ParamField path="pieceCid" type="string | PieceCID" required>
+      The piece CID to download
+    </ParamField>
+    
+    <ParamField path="context" type="StorageContext">
+      Specific context to download from
+    </ParamField>
+    
+    <ParamField path="providerAddress" type="Address">
+      Specific provider address to use
+    </ParamField>
+    
+    <ParamField path="withCDN" type="boolean">
+      Enable CDN retrieval (overrides instance default)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="data" type="Uint8Array">
+  Downloaded and validated data bytes
+</ResponseField>
+
+```typescript
+// Auto-resolve from any available provider
+const data = await synapse.storage.download({
+  pieceCid: 'baga6ea4seaq...'
+})
+
+// From specific provider
+const data = await synapse.storage.download({
+  pieceCid: 'baga6ea4seaq...',
+  providerAddress: '0x...'
+})
+
+// From specific context
+const context = await synapse.storage.createContext()
+const data = await synapse.storage.download({
+  pieceCid: 'baga6ea4seaq...',
+  context
+})
+```
+
+## Context Management
+
+### `createContext()`
+
+Create or retrieve a single storage context with intelligent caching.
+
+<ParamField path="options" type="StorageServiceOptions">
+  Context creation options
+  
+  <Expandable title="properties">
+    <ParamField path="providerId" type="bigint">
+      Specific provider ID to use
+    </ParamField>
+    
+    <ParamField path="dataSetId" type="bigint">
+      Specific data set ID to use
+    </ParamField>
+    
+    <ParamField path="metadata" type="Record<string, string>">
+      Metadata for data set matching
+    </ParamField>
+    
+    <ParamField path="withCDN" type="boolean">
+      Enable CDN services
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="context" type="StorageContext">
+  A storage context for the selected provider
+</ResponseField>
+
+```typescript
+// Auto-select provider and data set
+const context = await synapse.storage.createContext()
+
+// Specific provider
+const context = await synapse.storage.createContext({
+  providerId: 1n
+})
+
+// Specific data set
+const context = await synapse.storage.createContext({
+  dataSetId: 42n
+})
+```
+
+### `createContexts()`
+
+Create multiple contexts for multi-provider redundancy.
+
+<ParamField path="options" type="CreateContextsOptions">
+  Multi-context creation options
+  
+  <Expandable title="properties">
+    <ParamField path="count" type="number" default="2">
+      Number of contexts to create
+    </ParamField>
+    
+    <ParamField path="providerIds" type="bigint[]">
+      Specific provider IDs (mutually exclusive with dataSetIds)
+    </ParamField>
+    
+    <ParamField path="dataSetIds" type="bigint[]">
+      Specific data set IDs (mutually exclusive with providerIds)
+    </ParamField>
+    
+    <ParamField path="excludeProviderIds" type="bigint[]">
+      Provider IDs to exclude from selection
+    </ParamField>
+    
+    <ParamField path="metadata" type="Record<string, string>">
+      Metadata for data set matching
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="contexts" type="StorageContext[]">
+  Array of storage contexts
+</ResponseField>
+
+```typescript
+// Create 3 contexts with auto-selection
+const contexts = await synapse.storage.createContexts({ count: 3 })
+
+// Specific providers
+const contexts = await synapse.storage.createContexts({
+  providerIds: [1n, 2n, 3n]
+})
+```
+
+## Data Set Operations
+
+### `findDataSets()`
+
+Query all data sets owned by the current account.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="address" type="Address">
+      Account address (defaults to current signer)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="dataSets" type="EnhancedDataSetInfo[]">
+  Array of data set information including:
+  - `dataSetId` - Data set ID
+  - `providerId` - Provider ID
+  - `activePieceCount` - Number of pieces
+  - `metadata` - Data set metadata
+  - `withCDN` - CDN status
+</ResponseField>
+
+```typescript
+const dataSets = await synapse.storage.findDataSets()
+
+dataSets.forEach(ds => {
+  console.log(`Dataset ${ds.dataSetId}: ${ds.activePieceCount} pieces`)
+  console.log(`Provider: ${ds.providerId}`)
+  console.log(`CDN enabled: ${ds.withCDN}`)
+})
+```
+
+### `terminateDataSet()`
+
+Terminate a data set and remove all its pieces.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="dataSetId" type="bigint" required>
+      ID of the data set to terminate
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash of the termination
+</ResponseField>
+
+```typescript
+const txHash = await synapse.storage.terminateDataSet({
+  dataSetId: 42n
+})
+```
+
+### `getStorageInfo()`
+
+Get comprehensive storage service information including pricing, providers, and allowances.
+
+<ResponseField name="info" type="StorageInfo">
+  Complete service information:
+  - `pricing` - Cost per TiB (per epoch/day/month)
+  - `providers` - List of approved providers
+  - `serviceParameters` - Epoch durations, size limits
+  - `allowances` - Current operator approvals and usage
+</ResponseField>
+
+```typescript
+const info = await synapse.storage.getStorageInfo()
+
+console.log('Price per TiB/month:', info.pricing.noCDN.perTiBPerMonth)
+console.log('Approved providers:', info.providers.length)
+console.log('Min upload size:', info.serviceParameters.minUploadSize)
+
+if (info.allowances) {
+  console.log('Service approved:', info.allowances.isApproved)
+  console.log('Rate allowance:', info.allowances.rateAllowance)
+}
+```
+
+### `preflightUpload()`
+
+Run preflight checks for an upload without creating a context.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="size" type="number" required>
+      Size of data to upload in bytes
+    </ParamField>
+    
+    <ParamField path="withCDN" type="boolean">
+      Whether CDN is enabled
+    </ParamField>
+    
+    <ParamField path="metadata" type="Record<string, string>">
+      Metadata for the upload
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="info" type="PreflightInfo">
+  Preflight check results:
+  - `estimatedCost` - Cost breakdown (per epoch/day/month)
+  - `allowanceCheck` - Whether user has sufficient allowance
+</ResponseField>
+
+```typescript
+const preflight = await synapse.storage.preflightUpload({
+  size: 1024 * 1024 * 100, // 100 MiB
+  withCDN: true
+})
+
+console.log('Cost per month:', preflight.estimatedCost.perMonth)
+
+if (!preflight.allowanceCheck.sufficient) {
+  console.log('Insufficient allowance:', preflight.allowanceCheck.message)
+}
+```
+
+## Upload Flow Details
+
+The `upload()` method orchestrates a multi-step flow:
+
+1. **Store** - Upload to primary provider
+2. **Pull** - Secondary providers fetch from primary via SP-to-SP transfer
+3. **Commit** - Add pieces to on-chain data sets
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 3, // 1 primary + 2 secondaries
+  callbacks: {
+    onStored: (providerId) => 
+      console.log(`1. Stored on primary: ${providerId}`),
+    onPullProgress: (providerId, cid, status) =>
+      console.log(`2. Pull to ${providerId}: ${status}`),
+    onPiecesAdded: (txHash, providerId) =>
+      console.log(`3. Commit tx submitted: ${txHash}`),
+    onPiecesConfirmed: (dataSetId, providerId) =>
+      console.log(`4. Confirmed on dataset: ${dataSetId}`)
+  }
+})
+
+// Check results
+if (result.copies.length < 3) {
+  console.warn('Only', result.copies.length, 'copies succeeded')
+  result.failures.forEach(f => {
+    console.error(`Provider ${f.providerId} (${f.role}): ${f.error}`)
+  })
+}
+```
+
+## Error Handling
+
+```typescript
+import { StoreError, CommitError } from '@filoz/synapse-sdk/errors'
+
+try {
+  const result = await synapse.storage.upload(data)
+} catch (error) {
+  if (StoreError.is(error)) {
+    console.error('Primary store failed:', error.message)
+    console.error('Provider:', error.providerId)
+  } else if (CommitError.is(error)) {
+    console.error('All commits failed:', error.message)
+  }
+}
+```
+
+## See Also
+
+- [StorageContext](/api/storage-context) - Per-provider operations
+- [Upload Callbacks](/api/types) - Progress tracking
+- [Error Types](/api/errors) - Error handling

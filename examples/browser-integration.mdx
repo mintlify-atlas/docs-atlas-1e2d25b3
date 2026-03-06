@@ -1,0 +1,482 @@
+---
+title: Browser Integration
+description: Use Synapse SDK in browser applications with wallet connectors
+icon: window
+---
+
+## Overview
+
+Synapse SDK works in modern browsers with:
+- Wallet connectors (MetaMask, WalletConnect, etc.)
+- Web3 libraries (wagmi, viem)
+- File upload from browser
+- Progress tracking
+
+## Installation
+
+```bash
+npm install @filoz/synapse-sdk viem
+```
+
+## Basic Setup
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { createWalletClient, custom } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+// Connect to injected wallet (MetaMask, etc.)
+const client = createWalletClient({
+  chain: calibration,
+  transport: custom(window.ethereum),
+})
+
+const [address] = await client.getAddresses()
+
+const synapse = new Synapse({
+  client: client.extend({ account: address }),
+})
+```
+
+## File Upload from Input
+
+```typescript
+// HTML
+<input type="file" id="fileInput" />
+<button onclick="uploadFile()">Upload</button>
+<div id="progress"></div>
+
+// JavaScript
+async function uploadFile() {
+  const input = document.getElementById('fileInput')
+  const file = input.files[0]
+  
+  if (!file) return
+  
+  const progressDiv = document.getElementById('progress')
+  
+  // Convert File to ReadableStream
+  const stream = file.stream()
+  
+  const result = await synapse.storage.upload(stream, {
+    pieceMetadata: {
+      name: file.name,
+      type: file.type,
+      size: file.size.toString(),
+    },
+    callbacks: {
+      onProgress: (bytes) => {
+        const percent = (bytes / file.size) * 100
+        progressDiv.textContent = `Uploading: ${percent.toFixed(1)}%`
+      },
+      onStored: (providerId, pieceCid) => {
+        progressDiv.textContent = 'Stored! Committing on-chain...'
+      },
+      onPiecesConfirmed: () => {
+        progressDiv.textContent = '✓ Upload complete!'
+      },
+    },
+  })
+  
+  console.log('PieceCID:', result.pieceCid)
+}
+```
+
+## Download to Browser
+
+```typescript
+async function downloadFile(pieceCid: string, fileName: string) {
+  // Download data
+  const data = await synapse.storage.download({ pieceCid })
+  
+  // Create blob and download link
+  const blob = new Blob([data])
+  const url = URL.createObjectURL(blob)
+  
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileName
+  a.click()
+  
+  URL.revokeObjectURL(url)
+}
+
+// Usage
+<button onclick="downloadFile('baga...', 'photo.jpg')">Download</button>
+```
+
+## React Integration
+
+### Upload Component
+
+```typescript
+import { useState } from 'react'
+import { Synapse } from '@filoz/synapse-sdk'
+
+function FileUpload({ synapse }: { synapse: Synapse }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [pieceCid, setPieceCid] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  
+  const handleUpload = async () => {
+    if (!file) return
+    
+    setUploading(true)
+    setProgress(0)
+    
+    try {
+      const stream = file.stream()
+      
+      const result = await synapse.storage.upload(stream, {
+        pieceMetadata: {
+          name: file.name,
+          type: file.type,
+        },
+        callbacks: {
+          onProgress: (bytes) => {
+            setProgress((bytes / file.size) * 100)
+          },
+        },
+      })
+      
+      setPieceCid(result.pieceCid)
+    } catch (error) {
+      console.error('Upload failed:', error)
+      alert('Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+  
+  return (
+    <div>
+      <input 
+        type="file" 
+        onChange={(e) => setFile(e.target.files?.[0] || null)}
+        disabled={uploading}
+      />
+      
+      <button 
+        onClick={handleUpload} 
+        disabled={!file || uploading}
+      >
+        {uploading ? 'Uploading...' : 'Upload'}
+      </button>
+      
+      {uploading && (
+        <div>
+          <progress value={progress} max={100} />
+          <span>{progress.toFixed(1)}%</span>
+        </div>
+      )}
+      
+      {pieceCid && (
+        <div>✓ Uploaded: {pieceCid}</div>
+      )}
+    </div>
+  )
+}
+```
+
+### Download Component
+
+```typescript
+import { useState } from 'react'
+
+function FileDownload({ synapse, pieceCid, fileName }: { 
+  synapse: Synapse
+  pieceCid: string
+  fileName: string 
+}) {
+  const [downloading, setDownloading] = useState(false)
+  
+  const handleDownload = async () => {
+    setDownloading(true)
+    
+    try {
+      const data = await synapse.storage.download({ pieceCid })
+      
+      const blob = new Blob([data])
+      const url = URL.createObjectURL(blob)
+      
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      a.click()
+      
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Download failed:', error)
+      alert('Download failed')
+    } finally {
+      setDownloading(false)
+    }
+  }
+  
+  return (
+    <button onClick={handleDownload} disabled={downloading}>
+      {downloading ? 'Downloading...' : 'Download'}
+    </button>
+  )
+}
+```
+
+## Using with Wagmi
+
+```typescript
+import { useWalletClient } from 'wagmi'
+import { useMemo } from 'react'
+import { Synapse } from '@filoz/synapse-sdk'
+
+function useSynapse() {
+  const { data: walletClient } = useWalletClient()
+  
+  const synapse = useMemo(() => {
+    if (!walletClient) return null
+    
+    return new Synapse({ client: walletClient })
+  }, [walletClient])
+  
+  return synapse
+}
+
+// Usage in component
+function MyComponent() {
+  const synapse = useSynapse()
+  
+  if (!synapse) {
+    return <div>Connect wallet to use storage</div>
+  }
+  
+  return <FileUpload synapse={synapse} />
+}
+```
+
+## Progress Bar Component
+
+```typescript
+function ProgressBar({ progress }: { progress: number }) {
+  return (
+    <div style={{ width: '100%', backgroundColor: '#f0f0f0' }}>
+      <div
+        style={{
+          width: `${progress}%`,
+          backgroundColor: '#4caf50',
+          height: '20px',
+          transition: 'width 0.3s ease',
+        }}
+      >
+        {progress.toFixed(1)}%
+      </div>
+    </div>
+  )
+}
+
+// Usage
+<ProgressBar progress={uploadProgress} />
+```
+
+## Check Balance Before Upload
+
+```typescript
+import { formatUnits } from '@filoz/synapse-sdk'
+
+async function checkBalanceAndUpload(file: File) {
+  // Check wallet balance
+  const balance = await synapse.payments.walletBalance('USDFC')
+  
+  if (balance < 1000000000000000000n) { // Less than 1 USDFC
+    alert('Insufficient USDFC balance. Please deposit funds.')
+    return
+  }
+  
+  // Check preflight
+  const preflight = await synapse.storage.preflightUpload({ 
+    size: file.size 
+  })
+  
+  if (!preflight.allowanceCheck.sufficient) {
+    alert('Please approve the storage service first')
+    return
+  }
+  
+  // Proceed with upload
+  const result = await synapse.storage.upload(file.stream())
+  return result
+}
+```
+
+## Image Preview
+
+```typescript
+function ImagePreview({ pieceCid }: { pieceCid: string }) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  
+  useEffect(() => {
+    async function loadImage() {
+      try {
+        const data = await synapse.storage.download({ pieceCid })
+        const blob = new Blob([data])
+        const url = URL.createObjectURL(blob)
+        setImageUrl(url)
+      } catch (error) {
+        console.error('Failed to load image:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    loadImage()
+    
+    return () => {
+      if (imageUrl) {
+        URL.revokeObjectURL(imageUrl)
+      }
+    }
+  }, [pieceCid])
+  
+  if (loading) return <div>Loading...</div>
+  
+  return imageUrl ? <img src={imageUrl} alt="Preview" /> : <div>Failed to load</div>
+}
+```
+
+## Cancel Upload
+
+```typescript
+function CancellableUpload({ synapse }: { synapse: Synapse }) {
+  const [controller, setController] = useState<AbortController | null>(null)
+  const [uploading, setUploading] = useState(false)
+  
+  const handleUpload = async (file: File) => {
+    const newController = new AbortController()
+    setController(newController)
+    setUploading(true)
+    
+    try {
+      const result = await synapse.storage.upload(file.stream(), {
+        signal: newController.signal,
+      })
+      
+      alert('Upload complete!')
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        alert('Upload cancelled')
+      } else {
+        alert('Upload failed')
+      }
+    } finally {
+      setUploading(false)
+      setController(null)
+    }
+  }
+  
+  const handleCancel = () => {
+    controller?.abort()
+  }
+  
+  return (
+    <div>
+      <input type="file" onChange={(e) => handleUpload(e.target.files![0])} />
+      {uploading && (
+        <button onClick={handleCancel}>Cancel Upload</button>
+      )}
+    </div>
+  )
+}
+```
+
+## Multiple File Upload
+
+```typescript
+function MultiFileUpload({ synapse }: { synapse: Synapse }) {
+  const [files, setFiles] = useState<File[]>([])
+  const [results, setResults] = useState<Record<string, string>>({})
+  
+  const handleUpload = async () => {
+    const contexts = await synapse.storage.createContexts({ count: 2 })
+    const [primary, secondary] = contexts
+    
+    // Store all files
+    const stored = await Promise.all(
+      files.map(file => primary.store(file.stream()))
+    )
+    
+    // Pull and commit
+    const pieces = stored.map(s => ({ pieceCid: s.pieceCid }))
+    const extraData = await secondary.presignForCommit(pieces)
+    
+    await secondary.pull({ 
+      pieces: pieces.map(p => p.pieceCid), 
+      from: primary,
+      extraData,
+    })
+    
+    await primary.commit({ pieces })
+    await secondary.commit({ pieces, extraData })
+    
+    // Map files to PieceCIDs
+    const newResults: Record<string, string> = {}
+    files.forEach((file, i) => {
+      newResults[file.name] = stored[i].pieceCid
+    })
+    setResults(newResults)
+  }
+  
+  return (
+    <div>
+      <input 
+        type="file" 
+        multiple 
+        onChange={(e) => setFiles(Array.from(e.target.files || []))}
+      />
+      <button onClick={handleUpload}>Upload All</button>
+      
+      {Object.entries(results).map(([name, cid]) => (
+        <div key={name}>
+          {name}: {cid}
+        </div>
+      ))}
+    </div>
+  )
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Streaming" icon="water">
+    Use File.stream() for memory-efficient uploads
+  </Card>
+  <Card title="Show Progress" icon="chart-line">
+    Always show progress feedback to users
+  </Card>
+  <Card title="Check Balance" icon="wallet">
+    Verify balance before attempting uploads
+  </Card>
+  <Card title="Handle Errors" icon="triangle-exclamation">
+    Gracefully handle network and wallet errors
+  </Card>
+</CardGroup>
+
+## Limitations
+
+<Warning>
+  - Browser file size limits vary by browser
+  - Session keys improve UX by reducing wallet prompts
+  - Test thoroughly with different wallets
+  - Consider chunking very large files
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Session Keys" href="/guides/session-keys" icon="key">
+    Reduce wallet prompts with session keys
+  </Card>
+  <Card title="Upload/Download" href="/examples/upload-download" icon="arrow-up-arrow-down">
+    Learn core upload/download patterns
+  </Card>
+</CardGroup>

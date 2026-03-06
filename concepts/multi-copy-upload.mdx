@@ -1,0 +1,473 @@
+---
+title: Multi-Copy Upload
+description: How Synapse SDK ensures data redundancy across multiple storage providers
+---
+
+# Multi-Copy Upload
+
+Synapse SDK automatically replicates your data across multiple independent storage providers to ensure availability and durability. This guide explains how multi-copy uploads work and how to configure them for your needs.
+
+## Why Multiple Copies?
+
+<CardGroup cols={2}>
+  <Card title="Provider Independence" icon="server">
+    No single point of failure. If one provider goes offline, your data remains accessible from others.
+  </Card>
+  <Card title="Geographic Distribution" icon="globe">
+    Copies can be spread across different regions and operators for better resilience.
+  </Card>
+  <Card title="Performance" icon="gauge">
+    Download from the fastest or closest provider automatically.
+  </Card>
+  <Card title="Compliance" icon="shield-check">
+    Meet data redundancy requirements for regulations or SLAs.
+  </Card>
+</CardGroup>
+
+## Default Behavior
+
+By default, `upload()` creates **2 copies**:
+
+```typescript
+const result = await synapse.storage.upload(data)
+
+console.log('Copies:', result.copies.length) // 2
+
+// Copy 1: Primary (endorsed provider)
+// Copy 2: Secondary (approved provider)
+```
+
+### Provider Types
+
+**Endorsed Providers**: Curated, high-quality storage providers
+- Always used as the primary
+- Higher trust level
+- Subject to stricter quality checks
+
+**Approved Providers**: Pass automated quality criteria
+- Used as secondaries
+- Broader selection
+- All endorsed providers are also approved
+
+<Info>
+  The endorsed set is a subset of the approved set, ensuring the primary copy is on the most reliable provider.
+</Info>
+
+## Configuring Copy Count
+
+Specify the number of copies with the `count` option:
+
+```typescript
+// Single copy (primary only, no redundancy)
+const result = await synapse.storage.upload(data, { 
+  count: 1 
+})
+
+// Three copies (1 primary + 2 secondaries)
+const result = await synapse.storage.upload(data, { 
+  count: 3 
+})
+
+// Maximum redundancy (1 primary + 4 secondaries)
+const result = await synapse.storage.upload(data, { 
+  count: 5 
+})
+```
+
+<Warning>
+  More copies = higher storage costs. Each copy incurs its own payment rail. Choose the count that matches your availability requirements.
+</Warning>
+
+## Upload Flow
+
+Understand how multi-copy uploads work:
+
+```text
+1. Provider Selection
+   ├─ Select 1 endorsed provider (primary)
+   └─ Select N-1 approved providers (secondaries)
+
+2. Store on Primary
+   ├─ Upload data once from client
+   ├─ Calculate PieceCID
+   └─ Return PieceCID to client
+
+3. Pull to Secondaries (in parallel)
+   ├─ Each secondary fetches from primary (SP-to-SP)
+   ├─ No additional client bandwidth
+   └─ Automatic retries on failure
+
+4. Commit All (in parallel)
+   ├─ Primary: CreateDataSetAndAddPieces
+   └─ Secondaries: AddPieces or CreateDataSetAndAddPieces
+```
+
+### Example with Callbacks
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 3,
+  callbacks: {
+    onProviderSelected: (provider) => {
+      console.log(`✓ Selected provider ${provider.id}`)
+    },
+    
+    onStored: (providerId, pieceCid) => {
+      console.log(`✓ Stored on provider ${providerId}:`, pieceCid)
+    },
+    
+    onPullProgress: (providerId, pieceCid, status) => {
+      console.log(`  Provider ${providerId} pull: ${status}`)
+      // status: 'pending' | 'active' | 'complete' | 'failed'
+    },
+    
+    onCopyComplete: (providerId, pieceCid) => {
+      console.log(`✓ Copy complete on provider ${providerId}`)
+    },
+    
+    onCopyFailed: (providerId, pieceCid, error) => {
+      console.error(`✗ Copy failed on provider ${providerId}:`, error.message)
+    },
+    
+    onPiecesConfirmed: (dataSetId, providerId, pieces) => {
+      console.log(`✓ On-chain confirmation: dataset ${dataSetId}, provider ${providerId}`)
+    },
+  },
+})
+
+console.log('\nFinal result:')
+console.log('Total copies:', result.copies.length)
+console.log('Failures:', result.failures.length)
+```
+
+## Failure Handling
+
+The SDK handles failures gracefully with automatic retries.
+
+### Primary Failure (Fatal)
+
+If the primary store fails, the entire upload fails:
+
+```typescript
+import { StoreError } from '@filoz/synapse-sdk/errors'
+
+try {
+  await synapse.storage.upload(data)
+} catch (error) {
+  if (error instanceof StoreError) {
+    console.error('Primary store failed:')
+    console.error('  Provider:', error.providerId)
+    console.error('  Endpoint:', error.endpoint)
+    console.error('  Cause:', error.cause?.message)
+    
+    // Retry with explicit provider selection
+    const result = await synapse.storage.upload(data, {
+      excludeProviderIds: [error.providerId],
+    })
+  }
+}
+```
+
+### Secondary Failure (Non-Fatal)
+
+Secondary failures don't throw; they're reported in the result:
+
+```typescript
+const result = await synapse.storage.upload(data, { count: 3 })
+
+if (result.failures.length > 0) {
+  console.warn(`Warning: ${result.failures.length} copies failed`)
+  
+  for (const failure of result.failures) {
+    console.warn(`  Provider ${failure.providerId}: ${failure.error}`)
+  }
+}
+
+// Check if you have minimum required redundancy
+const minCopies = 2
+if (result.copies.length < minCopies) {
+  throw new Error(
+    `Insufficient redundancy: got ${result.copies.length} copies, need ${minCopies}`
+  )
+}
+
+console.log(`Success: ${result.copies.length} copies stored`)
+```
+
+### Automatic Retries
+
+The SDK automatically retries failed secondaries:
+
+```text
+Attempt 1: Provider A (fails)
+  ↓ (auto-retry)
+Attempt 2: Provider B (fails)
+  ↓ (auto-retry)
+Attempt 3: Provider C (succeeds)
+```
+
+**Retry behavior**:
+- **Max attempts**: 5 per secondary slot
+- **Provider selection**: Different provider each time (excludes failed ones)
+- **Explicit providers**: No retries (user specified exact providers)
+- **Auto-selected**: Retries enabled
+
+<Note>
+  Retries only occur for auto-selected providers. If you explicitly specify `providerIds`, failures are final.
+</Note>
+
+## Upload Result
+
+The `UploadResult` provides complete information about the upload:
+
+```typescript
+interface UploadResult {
+  pieceCid: PieceCID          // Content identifier
+  size: number                // Original data size in bytes
+  copies: CopyResult[]        // Successful copies
+  failures: FailedCopy[]      // Failed attempts
+}
+
+interface CopyResult {
+  providerId: bigint          // Storage provider ID
+  dataSetId: bigint           // On-chain data set ID
+  pieceId: bigint             // Piece ID within the data set
+  role: 'primary' | 'secondary'
+  retrievalUrl: string        // HTTP URL for downloads
+  isNewDataSet: boolean       // Whether dataset was created
+}
+
+interface FailedCopy {
+  providerId: bigint
+  role: 'primary' | 'secondary'
+  error: string               // Error message
+  explicit: boolean           // Whether provider was user-specified
+}
+```
+
+### Example: Inspect Result
+
+```typescript
+const result = await synapse.storage.upload(data, { count: 3 })
+
+console.log('Upload Summary:')
+console.log('  PieceCID:', result.pieceCid)
+console.log('  Size:', result.size, 'bytes')
+console.log('  Copies:', result.copies.length)
+console.log()
+
+for (const copy of result.copies) {
+  console.log(`Copy ${copy.role}:`)
+  console.log('  Provider ID:', copy.providerId)
+  console.log('  Data Set ID:', copy.dataSetId)
+  console.log('  Piece ID:', copy.pieceId)
+  console.log('  Retrieval URL:', copy.retrievalUrl)
+  console.log('  New dataset:', copy.isNewDataSet)
+  console.log()
+}
+
+if (result.failures.length > 0) {
+  console.log('Failures:')
+  for (const failure of result.failures) {
+    console.log(`  Provider ${failure.providerId} (${failure.role}): ${failure.error}`)
+  }
+}
+```
+
+## Advanced Provider Selection
+
+### Explicit Providers
+
+Specify exactly which providers to use:
+
+```typescript
+// Use specific provider IDs
+const result = await synapse.storage.upload(data, {
+  providerIds: [123n, 456n, 789n],
+})
+
+// No retries - if these providers fail, the upload fails
+```
+
+### Exclude Providers
+
+Avoid certain providers:
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 2,
+  excludeProviderIds: [999n], // Don't use this provider
+})
+```
+
+### Existing Data Sets
+
+Reuse existing data sets:
+
+```typescript
+// Find your data sets
+const dataSets = await synapse.storage.findDataSets()
+
+// Use specific data sets (reuses their providers)
+const result = await synapse.storage.upload(data, {
+  dataSetIds: [dataSets[0].dataSetId, dataSets[1].dataSetId],
+})
+
+// Pieces will be added to these existing data sets
+```
+
+<Info>
+  Using existing data sets is efficient - pieces are batched into the same data set, reducing on-chain transactions.
+</Info>
+
+## Cost Considerations
+
+Each copy incurs storage costs:
+
+```typescript
+// Get pricing info
+const info = await synapse.storage.getStorageInfo()
+
+const pricePerTiBPerMonth = info.pricing.noCDN.perTiBPerMonth
+const bytesPerTiB = 1024n ** 4n
+
+// Calculate cost for 100 MB with 3 copies
+const dataSizeBytes = 100n * 1024n * 1024n
+const copyCount = 3n
+
+const costPerCopy = (dataSizeBytes * pricePerTiBPerMonth) / bytesPerTiB
+const totalCost = costPerCopy * copyCount
+
+console.log('Cost per copy per month:', Number(costPerCopy) / 1e18, 'USDFC')
+console.log('Total cost per month:', Number(totalCost) / 1e18, 'USDFC')
+```
+
+**Preflight Check**:
+
+```typescript
+const preflight = await synapse.storage.preflightUpload({ 
+  size: dataSizeBytes,
+})
+
+if (!preflight.allowanceCheck.sufficient) {
+  console.error('Insufficient balance or allowances')
+  console.error(preflight.allowanceCheck.message)
+  
+  // Deposit more USDFC
+  await synapse.payments.depositWithPermitAndApproveOperator({
+    amount: parseUnits('100'), // 100 USDFC
+  })
+}
+```
+
+## Manual Multi-Copy Control
+
+For advanced use cases, manually control the multi-copy flow:
+
+```typescript
+// Create contexts for specific providers
+const contexts = await synapse.storage.createContexts({
+  providerIds: [123n, 456n, 789n],
+})
+
+const [primary, ...secondaries] = contexts
+
+// Store on primary
+const { pieceCid } = await primary.store(data)
+
+// Prepare signatures for all secondaries
+const pieceInputs = [{ pieceCid }]
+const extraDataMap = new Map()
+
+for (const secondary of secondaries) {
+  const extraData = await secondary.presignForCommit(pieceInputs)
+  extraDataMap.set(secondary, extraData)
+}
+
+// Pull to all secondaries in parallel
+await Promise.all(
+  secondaries.map(secondary =>
+    secondary.pull({
+      pieces: [pieceCid],
+      from: (cid) => primary.getPieceUrl(cid),
+      extraData: extraDataMap.get(secondary),
+    })
+  )
+)
+
+// Commit all in parallel
+const commits = [
+  primary.commit({ pieces: pieceInputs }),
+  ...secondaries.map(secondary =>
+    secondary.commit({
+      pieces: pieceInputs,
+      extraData: extraDataMap.get(secondary),
+    })
+  ),
+]
+
+const results = await Promise.all(commits)
+console.log('All copies committed:', results.length)
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose the right copy count">
+    - **count: 1** - Development/testing only
+    - **count: 2** - Default, good balance of cost and redundancy
+    - **count: 3+** - High-availability applications, critical data
+    
+    More copies = higher costs but better availability.
+  </Accordion>
+  
+  <Accordion title="Monitor failures">
+    Always check `result.failures` and alert if redundancy is below your threshold:
+    ```typescript
+    const MIN_COPIES = 2
+    if (result.copies.length < MIN_COPIES) {
+      await alertOperations('Insufficient storage redundancy')
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use callbacks for progress">
+    For user-facing uploads, use callbacks to show progress:
+    ```typescript
+    upload(data, {
+      callbacks: {
+        onProgress: (bytes) => updateProgressBar(bytes),
+        onCopyComplete: (id) => showNotification(`Copy ${id} done`),
+      },
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Reuse contexts for batches">
+    When uploading multiple files, create contexts once:
+    ```typescript
+    const contexts = await synapse.storage.createContexts({ count: 2 })
+    
+    for (const file of files) {
+      await synapse.storage.upload(file, { contexts })
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Provider Selection" icon="server" href="/concepts/provider-selection">
+    Learn how the SDK chooses storage providers
+  </Card>
+  <Card title="Storage Operations" icon="code" href="/guides/storage-operations">
+    Practical upload and download examples
+  </Card>
+  <Card title="Split Operations" icon="diagram-project" href="/examples/split-operations">
+    See multi-copy uploads with manual control
+  </Card>
+  <Card title="Payment Management" icon="wallet" href="/guides/payment-management">
+    Understand storage costs and payment rails
+  </Card>
+</CardGroup>

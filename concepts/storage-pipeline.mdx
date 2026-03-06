@@ -1,0 +1,440 @@
+---
+title: Storage Pipeline
+description: Understanding the store → pull → commit flow for reliable data storage
+---
+
+# Storage Pipeline
+
+Synapse SDK uses a three-phase pipeline to store data with cryptographic verification and on-chain provenance. Understanding this flow helps you optimize uploads and debug issues.
+
+## Overview
+
+The storage pipeline ensures your data is:
+1. **Stored** on physical storage
+2. **Replicated** across multiple providers
+3. **Committed** on-chain with PDP verification
+
+```text
+Client Data
+    ↓
+  STORE  ────> Primary Provider (Endorsed)
+    │               │
+    │               │ PieceCID calculated
+    │               │ Data written to disk
+    │               │
+    ↓               ↓
+  PULL   <─────────── Secondary Provider(s)
+                    │   (fetch from primary)
+                    │
+                    ↓
+  COMMIT ────> Smart Contracts
+                    │   - Create data set
+                    │   - Register pieces
+                    │   - Start PDP verification
+                    │   - Set up payment rails
+                    │
+                    ↓
+           On-chain provenance + proofs
+```
+
+## Phase 1: Store
+
+Upload data to the primary storage provider.
+
+### What Happens
+
+<Steps>
+  <Step title="PieceCID Calculation">
+    The SDK or storage provider calculates the Filecoin PieceCID:
+    - Binary merkle tree of 128 KiB chunks
+    - Padded to next power of 2
+    - Last 32 bytes = root hash (used in contracts)
+    
+    This is the content-addressed identifier for your data.
+  </Step>
+  
+  <Step title="Streaming Upload">
+    Data is streamed to the provider's Curio API:
+    ```typescript
+    POST /pdp/piece/uploads         // Create session
+    PUT  /pdp/piece/uploads/{uuid}  // Stream data
+    POST /pdp/piece/uploads/{uuid}  // Finalize
+    ```
+    
+    For large files, streaming avoids loading everything into memory.
+  </Step>
+  
+  <Step title="Storage Confirmation">
+    Provider writes data to disk and returns the PieceCID. No on-chain state yet.
+  </Step>
+</Steps>
+
+### Example: Store Only
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = Synapse.create({ chain, transport, account })
+
+// Create a context for a specific provider
+const context = await synapse.storage.createContext()
+
+// Store data (no on-chain commitment)
+const data = new TextEncoder().encode('Hello, Filecoin!')
+const { pieceCid, size } = await context.store(data, {
+  onProgress: (bytesUploaded) => {
+    console.log(`Uploaded: ${bytesUploaded} bytes`)
+  },
+})
+
+console.log('PieceCID:', pieceCid)
+console.log('Size:', size)
+
+// Data is on the provider but NOT on-chain
+// The provider may garbage collect it if not committed
+```
+
+<Note>
+  Data stored but not committed may be garbage collected by the provider. Always commit within a reasonable timeframe (minutes to hours).
+</Note>
+
+## Phase 2: Pull
+
+Secondary providers fetch data from the primary via SP-to-SP transfer.
+
+### Why Pull?
+
+Instead of uploading the same data multiple times from your client:
+- **Bandwidth Efficiency**: Upload once, providers replicate
+- **Faster**: Storage providers have better inter-connectivity
+- **Cost Effective**: Reduces client egress costs
+
+### How It Works
+
+<Steps>
+  <Step title="Presign for Commit">
+    Create EIP-712 signature authorizing the piece addition:
+    ```typescript
+    const extraData = await secondary.presignForCommit([
+      { pieceCid, pieceMetadata: { category: 'documents' } }
+    ])
+    ```
+    
+    This signature serves dual purpose:
+    - Authorization for the pull (Curio validates via `estimateGas`)
+    - Authorization for the on-chain commit
+  </Step>
+  
+  <Step title="SP-to-SP Transfer">
+    Secondary provider requests the piece from primary:
+    ```typescript
+    await secondary.pull({
+      pieces: [pieceCid],
+      from: (cid) => primary.getPieceUrl(cid),
+      extraData,
+    })
+    ```
+    
+    The Curio API endpoint:
+    ```
+    POST /pdp/piece/pull
+    {
+      "pieceCid": "baga6ea...",
+      "url": "https://primary-sp.example/pdp/piece/baga6ea...",
+      "extraData": "0x..."
+    }
+    ```
+  </Step>
+  
+  <Step title="Validation">
+    Secondary provider:
+    - Fetches data from primary
+    - Verifies PieceCID matches
+    - Validates `extraData` signature via `estimateGas`
+    - Writes to local storage
+  </Step>
+</Steps>
+
+### Example: Manual Pull
+
+```typescript
+const [primary, secondary] = await synapse.storage.createContexts({ count: 2 })
+
+// Store on primary
+const { pieceCid } = await primary.store(data)
+
+// Presign for commit (reusable signature)
+const extraData = await secondary.presignForCommit([{ pieceCid }])
+
+// Pull to secondary
+const pullResult = await secondary.pull({
+  pieces: [pieceCid],
+  from: (cid) => primary.getPieceUrl(cid),
+  extraData,
+  onProgress: (cid, status) => {
+    console.log(`Pull status: ${status}`) // 'pending', 'active', 'complete'
+  },
+})
+
+if (pullResult.status === 'complete') {
+  console.log('Secondary has the data')
+}
+```
+
+<Info>
+  The pull operation is idempotent. If it fails mid-transfer, you can retry safely.
+</Info>
+
+## Phase 3: Commit
+
+Register pieces on-chain and start PDP verification.
+
+### What Happens On-Chain
+
+<Steps>
+  <Step title="Transaction Submission">
+    For each provider, call the FWSS contract:
+    
+    **New data set**:
+    ```solidity
+    createDataSetAndAddPieces(
+      pieceDigests[],      // 32-byte piece roots
+      pieceSizes[],        // Piece sizes in bytes
+      metadata,            // Dataset metadata
+      pieceMetadata[],     // Per-piece metadata
+      extraData            // EIP-712 signature
+    )
+    ```
+    
+    **Existing data set**:
+    ```solidity
+    addPieces(
+      dataSetId,
+      pieceDigests[],
+      pieceSizes[],
+      pieceMetadata[],
+      extraData
+    )
+    ```
+  </Step>
+  
+  <Step title="Signature Validation">
+    FWSS contract validates the EIP-712 signature:
+    - Recovers signer address
+    - Verifies signer is the payer
+    - Checks signature matches piece data
+  </Step>
+  
+  <Step title="PDPVerifier Callback">
+    FWSS calls `PDPVerifier.submitProofSet()`:
+    - Registers pieces for verification
+    - Schedules first challenge window
+    - PDPVerifier callbacks to FWSS for payment setup
+  </Step>
+  
+  <Step title="Payment Rails">
+    FWSS creates continuous payment rails:
+    - **PDP rail**: Base storage cost (per epoch)
+    - **CDN rail**: (if `withCDN=true`) Egress charges
+    - **Cache miss rail**: (if `withCDN=true`) Provider egress
+    
+    Payments flow automatically from your deposit to the provider.
+  </Step>
+</Steps>
+
+### Example: Commit
+
+```typescript
+const result = await primary.commit({
+  pieces: [{ pieceCid, pieceMetadata: { filename: 'example.txt' } }],
+  onSubmitted: (txHash) => {
+    console.log('Transaction submitted:', txHash)
+    // Can show user a block explorer link
+  },
+})
+
+console.log('Data set ID:', result.dataSetId)
+console.log('Piece IDs:', result.pieceIds)
+console.log('Is new dataset:', result.isNewDataSet)
+```
+
+### Transaction Confirmation
+
+Filecoin has a 30-second block time. Expect:
+- **Transaction submission**: Instant (returns hash)
+- **First confirmation**: ~30 seconds
+- **Finality**: ~60-90 seconds (2-3 blocks)
+
+<Warning>
+  Always wait for transaction confirmation before considering data committed. Use callbacks or wait for the promise to resolve.
+</Warning>
+
+## Combined Flow: upload()
+
+The high-level `upload()` method orchestrates all three phases:
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 2, // 1 primary + 1 secondary
+  callbacks: {
+    // Phase 0: Provider selection
+    onProviderSelected: (provider) => {
+      console.log('Selected:', provider.id)
+    },
+    
+    // Phase 1: Store
+    onProgress: (bytesUploaded) => {
+      console.log('Uploaded:', bytesUploaded)
+    },
+    onStored: (providerId, pieceCid) => {
+      console.log('Stored on', providerId)
+    },
+    
+    // Phase 2: Pull
+    onPullProgress: (providerId, pieceCid, status) => {
+      console.log(`SP ${providerId} pull:`, status)
+    },
+    onCopyComplete: (providerId, pieceCid) => {
+      console.log('Copied to', providerId)
+    },
+    onCopyFailed: (providerId, pieceCid, error) => {
+      console.error('Copy failed:', error)
+    },
+    
+    // Phase 3: Commit
+    onPiecesAdded: (txHash, providerId, pieces) => {
+      console.log('Tx submitted:', txHash)
+    },
+    onPiecesConfirmed: (dataSetId, providerId, pieces) => {
+      console.log('Confirmed:', dataSetId)
+    },
+  },
+})
+
+console.log('Upload complete!')
+console.log('Copies:', result.copies.length)
+console.log('Failures:', result.failures)
+```
+
+## Failure Handling
+
+### Store Failure (Fatal)
+
+If the primary store fails, `upload()` throws `StoreError`:
+
+```typescript
+try {
+  await synapse.storage.upload(data)
+} catch (error) {
+  if (error instanceof StoreError) {
+    console.error('Failed to store on primary:', error.providerId)
+    console.error('Endpoint:', error.endpoint)
+    console.error('Cause:', error.cause)
+  }
+}
+```
+
+### Pull Failure (Non-Fatal)
+
+Secondary pull failures are reported but don't throw:
+
+```typescript
+const result = await synapse.storage.upload(data, { count: 3 })
+
+if (result.failures.length > 0) {
+  console.warn('Some copies failed:')
+  for (const failure of result.failures) {
+    console.warn(`Provider ${failure.providerId}: ${failure.error}`)
+  }
+}
+
+// Check if you got enough copies
+if (result.copies.length < 2) {
+  throw new Error('Insufficient redundancy')
+}
+```
+
+The SDK automatically retries with different providers (up to 5 attempts per secondary).
+
+### Commit Failure (Partial)
+
+If commit fails on the primary, `upload()` throws `CommitError`:
+
+```typescript
+try {
+  await synapse.storage.upload(data)
+} catch (error) {
+  if (error instanceof CommitError) {
+    console.error('Data stored but not committed on-chain')
+    console.error('You can retry the commit with the same pieceCid')
+  }
+}
+```
+
+If commit fails on a secondary, it's reported in `result.failures`.
+
+## Optimization Tips
+
+### 1. Batch Multiple Files
+
+For multiple files, use split operations to reduce on-chain transactions:
+
+```typescript
+const context = await synapse.storage.createContext()
+
+// Store all files
+const stored = await Promise.all(
+  files.map(file => context.store(file))
+)
+
+// Commit in one transaction
+await context.commit({
+  pieces: stored.map(s => ({ pieceCid: s.pieceCid })),
+})
+```
+
+This creates one transaction instead of N transactions.
+
+### 2. Pre-calculate PieceCID
+
+If you already have the PieceCID (e.g., from a previous calculation):
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const pieceCid = await Piece.calculate(data)
+
+await context.store(data, { pieceCid })
+// Provider verifies but doesn't recalculate
+```
+
+### 3. Reuse Contexts
+
+Contexts are cached and reused automatically:
+
+```typescript
+// First upload creates contexts
+const result1 = await synapse.storage.upload(data1)
+
+// Second upload reuses the same contexts (same providers)
+const result2 = await synapse.storage.upload(data2)
+```
+
+This reduces provider selection overhead and keeps data on the same providers.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Copy Upload" icon="copy" href="/concepts/multi-copy-upload">
+    Deep dive into redundancy and failure handling
+  </Card>
+  <Card title="Provider Selection" icon="server" href="/concepts/provider-selection">
+    How the SDK chooses storage providers
+  </Card>
+  <Card title="Storage Operations Guide" icon="code" href="/guides/storage-operations">
+    Practical examples of uploads and downloads
+  </Card>
+  <Card title="Split Operations Example" icon="diagram-project" href="/examples/split-operations">
+    See the pipeline in action with real code
+  </Card>
+</CardGroup>

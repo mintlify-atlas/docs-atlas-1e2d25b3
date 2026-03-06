@@ -1,0 +1,162 @@
+---
+title: 'Typed Data'
+description: 'EIP-712 signing for storage operations'
+---
+
+## Overview
+
+The `@filoz/synapse-core/typed-data` module provides EIP-712 typed data signing functions for FWSS contract operations. These create cryptographic signatures that authorize storage providers to execute on-chain actions on behalf of users.
+
+<Note>
+**Used Internally**
+
+These functions are used internally by `StorageContext`. Most users don't need to call them directly.
+</Note>
+
+## Core Signing Functions
+
+### `signCreateDataSetAndAddPieces()`
+
+Sign authorization to create a new data set and add pieces.
+
+```typescript
+import { signCreateDataSetAndAddPieces } from '@filoz/synapse-core/typed-data'
+import { randU256 } from '@filoz/synapse-core/utils'
+
+const extraData = await signCreateDataSetAndAddPieces(client, {
+  clientDataSetId: randU256(), // Random nonce
+  payee: providerAddress,
+  payer: clientAddress,
+  metadata: [
+    { key: 'category', value: 'videos' },
+    { key: 'cdn', value: '' }
+  ],
+  pieces: [
+    { 
+      pieceCid,
+      metadata: [
+        { key: 'title', value: 'My Video' }
+      ]
+    }
+  ]
+})
+
+// Pass to SP client
+await SP.createDataSetAndAddPieces(client, {
+  ...
+,
+  extraData
+})
+```
+
+### `signAddPieces()`
+
+Sign authorization to add pieces to an existing data set.
+
+```typescript
+import { signAddPieces } from '@filoz/synapse-core/typed-data'
+
+const extraData = await signAddPieces(client, {
+  clientDataSetId: 456n, // Existing dataset nonce
+  pieces: [
+    { pieceCid, metadata: [] }
+  ]
+})
+
+// Pass to SP client
+await SP.addPieces(client, {
+  dataSetId: 123n,
+  clientDataSetId: 456n,
+  pieces: [{ pieceCid }],
+  serviceURL,
+  extraData
+})
+```
+
+### `signSchedulePieceRemovals()`
+
+Sign authorization to schedule piece removals.
+
+```typescript
+import { signSchedulePieceRemovals } from '@filoz/synapse-core/typed-data'
+
+const extraData = await signSchedulePieceRemovals(client, {
+  clientDataSetId: 456n,
+  pieceIds: [1n, 2n, 3n]
+})
+
+// Pass to SP client for deletion
+```
+
+### `signErc20Permit()`
+
+Sign ERC-2612 permit for token approval.
+
+```typescript
+import { signErc20Permit } from '@filoz/synapse-core/typed-data'
+import { parseUnits } from 'viem'
+
+const permitSignature = await signErc20Permit(client, {
+  token: usdfc.address,
+  spender: filecoinPay.address,
+  amount: parseUnits('100', 18),
+  nonce: 0n,
+  deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+  name: 'USDFC',
+  version: '1'
+})
+```
+
+## Metadata Format
+
+Metadata is passed as an array of key-value pairs:
+
+```typescript
+type MetadataEntry = { key: string; value: string }
+
+const metadata: MetadataEntry[] = [
+  { key: 'category', value: 'documents' },
+  { key: 'project', value: 'alpha' },
+  { key: 'cdn', value: '' } // Empty value signals boolean flag
+]
+```
+
+## Usage in StorageContext
+
+`StorageContext` uses these internally in `presignForCommit()`:
+
+```typescript
+// High-level API (recommended)
+const context = await synapse.storage.createContext()
+const extraData = await context.presignForCommit([
+  { pieceCid, pieceMetadata: { tag: 'important' } }
+])
+
+// Internally calls signCreateDataSetAndAddPieces or signAddPieces
+```
+
+## EIP-712 Domain
+
+All signatures use the FWSS contract domain:
+
+```typescript
+const domain = {
+  name: 'FilecoinWarmStorageService',
+  version: '1',
+  chainId: chain.id,
+  verifyingContract: chain.contracts.fwss.address
+}
+```
+
+## Security
+
+- Signatures are scoped to specific data sets via `clientDataSetId`
+- Providers validate signatures via `estimateGas` before operations
+- Signed data includes all piece metadata for verification
+- Deadlines prevent replay attacks
+
+## See Also
+
+- [EIP-712 Specification](https://eips.ethereum.org/EIPS/eip-712) - Typed data standard
+- [StorageContext](/api/storage-context) - High-level API using these functions
+- [FWSS Contract](https://github.com/FilOzone/filecoin-services) - Contract implementation

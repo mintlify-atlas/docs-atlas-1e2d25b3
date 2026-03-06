@@ -1,0 +1,274 @@
+---
+title: 'Contract Actions'
+description: 'Low-level contract interaction functions'
+---
+
+## Overview
+
+Synapse Core provides low-level functions for interacting with Filecoin Onchain Cloud contracts. These follow Viem's action pattern and are used internally by higher-level services.
+
+<Warning>
+**Low-Level API**
+
+Most developers should use `Synapse`, `StorageManager`, or `PaymentsService` instead. These actions are for advanced use cases requiring direct contract access.
+</Warning>
+
+## Module Structure
+
+Core actions are organized by contract:
+
+```typescript
+import * as Pay from '@filoz/synapse-core/pay'
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import * as PDPVerifier from '@filoz/synapse-core/pdp-verifier'
+import * as SPRegistry from '@filoz/synapse-core/sp-registry'
+import * as ERC20 from '@filoz/synapse-core/erc20'
+```
+
+## Action Pattern
+
+All actions follow this pattern:
+
+### Read Actions
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+
+const pricing = await WarmStorage.getServicePrice(client, {})
+console.log(pricing)
+```
+
+### Write Actions
+
+```typescript
+import * as Pay from '@filoz/synapse-core/pay'
+
+const txHash = await Pay.deposit(client, {
+  amount: parseUnits('100', 18)
+})
+
+console.log('Tx:', txHash)
+```
+
+### Call Functions
+
+For use with `multicall`, `simulateContract`, etc:
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import { multicall } from 'viem/actions'
+
+const results = await multicall(client, {
+  contracts: [
+    WarmStorage.getServicePriceCall({ chain: calibration }),
+    WarmStorage.getApprovedProvidersCall({ chain: calibration })
+  ]
+})
+```
+
+## Examples by Contract
+
+### FilecoinPay
+
+```typescript
+import * as Pay from '@filoz/synapse-core/pay'
+import { parseUnits } from 'viem'
+
+// Get account info
+const account = await Pay.accounts(client, {
+  address: clientAddress
+})
+
+// Deposit
+const depositTx = await Pay.deposit(client, {
+  amount: parseUnits('100', 18)
+})
+
+// Withdraw
+const withdrawTx = await Pay.withdraw(client, {
+  amount: parseUnits('50', 18)
+})
+
+// Set operator approval
+const approveTx = await Pay.setOperatorApproval(client, {
+  operator: fwssAddress,
+  approve: true,
+  rateAllowance: parseUnits('10', 18),
+  lockupAllowance: parseUnits('100', 18)
+})
+
+// Check operator approval
+const approval = await Pay.operatorApprovals(client, {
+  address: clientAddress,
+  operator: fwssAddress
+})
+```
+
+### Warm Storage
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+
+// Get pricing
+const pricing = await WarmStorage.getServicePrice(client)
+
+// Get approved providers
+const providerIds = await WarmStorage.getApprovedProviders(client, {
+  offset: 0n,
+  limit: 100n
+})
+
+// Get client data sets
+const dataSets = await WarmStorage.getClientDataSets(client, {
+  address: clientAddress
+})
+
+// Get data set info
+const dataSet = await WarmStorage.getDataSet(client, {
+  dataSetId: 123n
+})
+
+// Get metadata
+const metadata = await WarmStorage.getAllDataSetMetadata(client, {
+  dataSetId: 123n
+})
+
+// Terminate data set
+const terminateTx = await WarmStorage.terminateService(client, {
+  dataSetId: 123n
+})
+```
+
+### PDPVerifier
+
+```typescript
+import * as PDPVerifier from '@filoz/synapse-core/pdp-verifier'
+
+// Check if data set is live
+const isLive = await PDPVerifier.dataSetLive(client, {
+  dataSetId: 123n
+})
+
+// Get active piece count
+const count = await PDPVerifier.getActivePieceCount(client, {
+  dataSetId: 123n
+})
+
+// Get pieces with pagination
+const pieces = await PDPVerifier.getActivePieces(client, {
+  dataSetId: 123n,
+  offset: 0n,
+  limit: 100n
+})
+
+// Get scheduled removals
+const scheduled = await PDPVerifier.getScheduledRemovals(client, {
+  dataSetId: 123n
+})
+```
+
+### Service Provider Registry
+
+```typescript
+import * as SPRegistry from '@filoz/synapse-core/sp-registry'
+
+// Get provider by ID
+const provider = await SPRegistry.getPDPProvider(client, {
+  providerId: 1n
+})
+
+// Get all active providers
+const allProviders = await SPRegistry.getAllActivePDPProviders(client)
+
+// Register provider
+const registerTx = await SPRegistry.registerProvider(client, {
+  payee: providerAddress,
+  name: 'My Provider',
+  description: 'High-quality storage',
+  pdpOffering: { ... },
+  capabilities: { region: 'us-east' }
+})
+```
+
+### ERC20
+
+```typescript
+import * as ERC20 from '@filoz/synapse-core/erc20'
+import { parseUnits } from 'viem'
+
+// Get balance and allowance
+const balance = await ERC20.balance(client, {
+  address: clientAddress
+})
+
+console.log('Balance:', balance.value)
+console.log('Allowance:', balance.allowance)
+
+// Approve spender
+const approveTx = await ERC20.approve(client, {
+  spender: filecoinPayAddress,
+  amount: parseUnits('100', 18)
+})
+
+// Approve and wait
+const { receipt } = await ERC20.approveSync(client, {
+  spender: filecoinPayAddress,
+  amount: parseUnits('100', 18),
+  onHash: (hash) => console.log('Tx:', hash)
+})
+```
+
+## Multicall Pattern
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import * as Pay from '@filoz/synapse-core/pay'
+import { multicall } from 'viem/actions'
+import { calibration } from '@filoz/synapse-core/chains'
+
+// Batch multiple read calls
+const results = await multicall(client, {
+  contracts: [
+    WarmStorage.getServicePriceCall({ chain: calibration }),
+    WarmStorage.getApprovedProvidersCall({ 
+      chain: calibration,
+      offset: 0n,
+      limit: 100n
+    }),
+    Pay.accountsCall({
+      chain: calibration,
+      address: clientAddress
+    })
+  ]
+})
+
+const [pricing, providerIds, accountInfo] = results.map(r => r.result)
+```
+
+## Error Handling
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import { BaseError, ContractFunctionRevertedError } from 'viem'
+
+try {
+  const dataSet = await WarmStorage.getDataSet(client, {
+    dataSetId: 123n
+  })
+} catch (error) {
+  if (error instanceof BaseError) {
+    const revertError = error.walk(
+      err => err instanceof ContractFunctionRevertedError
+    )
+    if (revertError instanceof ContractFunctionRevertedError) {
+      console.error('Contract revert:', revertError.data?.errorName)
+    }
+  }
+}
+```
+
+## See Also
+
+- [Viem Actions](https://viem.sh/docs/actions/public/readContract) - Action pattern
+- [Chains](/api/core/chains) - Chain configurations
+- [High-Level Services](/api/synapse-class) - Recommended API

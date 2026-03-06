@@ -1,0 +1,664 @@
+---
+title: 'PaymentsService'
+description: 'Manage deposits, withdrawals, and payment rails for Filecoin services'
+---
+
+## Overview
+
+The `PaymentsService` provides access to the Filecoin Pay contract for managing deposits, withdrawals, operator approvals, and payment rails. All operations use USDFC tokens.
+
+Access via `synapse.payments`.
+
+## Balance Operations
+
+### `balance()`
+
+Get the available balance in the payments contract.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to check balance for (currently only USDFC supported)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="balance" type="bigint">
+  Available funds in base units (18 decimals)
+</ResponseField>
+
+```typescript
+const balance = await synapse.payments.balance()
+console.log('Available:', balance.toString())
+```
+
+### `walletBalance()`
+
+Get the token balance in the wallet.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="token" type="TokenIdentifier" default="FIL">
+      Token to check (FIL or USDFC)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="balance" type="bigint">
+  Wallet balance in base units
+</ResponseField>
+
+```typescript
+// Check FIL balance
+const filBalance = await synapse.payments.walletBalance({ token: 'FIL' })
+
+// Check USDFC balance
+const usdfc = await synapse.payments.walletBalance({ token: 'USDFC' })
+```
+
+### `accountInfo()`
+
+Get detailed account information from the payments contract.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to get info for
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="info" type="object">
+  Account information including:
+  - `availableFunds` - Funds available for withdrawal
+  - `lockedFunds` - Funds locked in active rails
+  - Additional account details
+</ResponseField>
+
+```typescript
+const info = await synapse.payments.accountInfo()
+console.log('Available:', info.availableFunds)
+console.log('Locked:', info.lockedFunds)
+```
+
+### `decimals()`
+
+Get the number of decimals for tokens (both FIL and USDFC use 18).
+
+<ResponseField name="decimals" type="number">
+  Number of decimals (always 18)
+</ResponseField>
+
+```typescript
+const decimals = synapse.payments.decimals() // 18
+```
+
+## Deposit Operations
+
+### `deposit()`
+
+Deposit USDFC tokens into the payments contract.
+
+<ParamField path="options" type="DepositOptions" required>
+  Deposit options
+  
+  <Expandable title="properties">
+    <ParamField path="amount" type="bigint" required>
+      Amount to deposit in base units
+    </ParamField>
+    
+    <ParamField path="to" type="Address">
+      Recipient address (defaults to sender)
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to deposit
+    </ParamField>
+    
+    <ParamField path="onAllowanceCheck" type="(current, required) => void">
+      Called when checking allowance
+    </ParamField>
+    
+    <ParamField path="onApprovalTransaction" type="(tx: Hash) => void">
+      Called when approval tx is sent
+    </ParamField>
+    
+    <ParamField path="onApprovalConfirmed" type="(receipt) => void">
+      Called when approval is confirmed
+    </ParamField>
+    
+    <ParamField path="onDepositStarting" type="() => void">
+      Called before deposit tx
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash of the deposit
+</ResponseField>
+
+```typescript
+import { parseUnits } from 'viem'
+
+const amount = parseUnits('100', 18) // 100 USDFC
+
+const txHash = await synapse.payments.deposit({
+  amount,
+  onAllowanceCheck: (current, required) => {
+    if (current < required) {
+      console.log('Approving USDFC spend...')
+    }
+  },
+  onApprovalTransaction: (tx) => console.log('Approval tx:', tx),
+  onDepositStarting: () => console.log('Depositing...')
+})
+
+console.log('Deposit tx:', txHash)
+```
+
+### `depositWithPermit()`
+
+Deposit using ERC-2612 permit to combine approval and deposit in one transaction.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="amount" type="bigint" required>
+      Amount to deposit
+    </ParamField>
+    
+    <ParamField path="deadline" type="bigint">
+      Permit deadline (defaults to now + 1 hour)
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to deposit
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.depositWithPermit({
+  amount: parseUnits('100', 18)
+})
+```
+
+### `depositWithPermitAndApproveOperator()`
+
+Deposit and approve a service operator in a single transaction.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="amount" type="bigint" required>
+      Amount to deposit
+    </ParamField>
+    
+    <ParamField path="operator" type="Address">
+      Operator address (defaults to FWSS contract)
+    </ParamField>
+    
+    <ParamField path="rateAllowance" type="bigint">
+      Maximum rate per epoch
+    </ParamField>
+    
+    <ParamField path="lockupAllowance" type="bigint">
+      Maximum lockup amount
+    </ParamField>
+    
+    <ParamField path="maxLockupPeriod" type="bigint">
+      Maximum lockup period in epochs
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.depositWithPermitAndApproveOperator({
+  amount: parseUnits('1000', 18),
+  rateAllowance: parseUnits('10', 18),
+  lockupAllowance: parseUnits('100', 18)
+})
+```
+
+### `withdraw()`
+
+Withdraw funds from the payments contract.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="amount" type="bigint" required>
+      Amount to withdraw
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to withdraw
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.withdraw({
+  amount: parseUnits('50', 18)
+})
+```
+
+## Operator Approvals
+
+### `approveService()`
+
+Approve a service contract as an operator to manage payment rails.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="service" type="Address">
+      Service contract address (defaults to FWSS)
+    </ParamField>
+    
+    <ParamField path="rateAllowance" type="bigint">
+      Maximum payment rate per epoch (defaults to max)
+    </ParamField>
+    
+    <ParamField path="lockupAllowance" type="bigint">
+      Maximum lockup amount (defaults to max)
+    </ParamField>
+    
+    <ParamField path="maxLockupPeriod" type="bigint">
+      Maximum lockup period in epochs (defaults to 30 days)
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to approve for
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+// Approve with custom limits
+const txHash = await synapse.payments.approveService({
+  rateAllowance: parseUnits('10', 18), // 10 USDFC per epoch
+  lockupAllowance: parseUnits('1000', 18) // 1000 USDFC lockup
+})
+
+// Approve with defaults (maxUint256)
+const txHash = await synapse.payments.approveService()
+```
+
+### `revokeService()`
+
+Revoke a service contract's operator approval.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="service" type="Address">
+      Service contract address (defaults to FWSS)
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to revoke for
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.revokeService()
+```
+
+### `serviceApproval()`
+
+Check operator approval status and allowances.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="service" type="Address">
+      Service contract address (defaults to FWSS)
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to check
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="approval" type="object">
+  Approval status:
+  - `isApproved` - Whether operator is approved
+  - `rateAllowance` - Maximum rate per epoch
+  - `lockupAllowance` - Maximum lockup amount
+  - `rateUsage` - Current rate usage
+  - `lockupUsage` - Current lockup usage
+</ResponseField>
+
+```typescript
+const approval = await synapse.payments.serviceApproval()
+
+if (!approval.isApproved) {
+  console.log('Service not approved')
+} else {
+  console.log('Rate allowance:', approval.rateAllowance)
+  console.log('Rate used:', approval.rateUsage)
+  console.log('Lockup allowance:', approval.lockupAllowance)
+  console.log('Lockup used:', approval.lockupUsage)
+}
+```
+
+## ERC20 Operations
+
+### `allowance()`
+
+Check current ERC20 allowance for a spender.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="spender" type="Address" required>
+      Spender address to check
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to check
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="allowance" type="bigint">
+  Current allowance amount
+</ResponseField>
+
+```typescript
+const allowance = await synapse.payments.allowance({
+  spender: '0x...'
+})
+```
+
+### `approve()`
+
+Approve an ERC20 spender.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="spender" type="Address" required>
+      Spender address
+    </ParamField>
+    
+    <ParamField path="amount" type="bigint" required>
+      Amount to approve
+    </ParamField>
+    
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to approve
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.approve({
+  spender: '0x...',
+  amount: parseUnits('100', 18)
+})
+```
+
+## Payment Rails
+
+### `getRail()`
+
+Get detailed information about a payment rail.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="railId" type="bigint" required>
+      Rail ID to query
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="rail" type="object">
+  Rail information including payer, payee, rate, lockup, and settlement status
+</ResponseField>
+
+```typescript
+const rail = await synapse.payments.getRail({ railId: 1n })
+
+console.log('Payer:', rail.payer)
+console.log('Payee:', rail.payee)
+console.log('Rate:', rail.rate)
+console.log('Lockup:', rail.lockup)
+```
+
+### `getRailsAsPayer()`
+
+Get all rails where the wallet is the payer.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to filter by
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="rails" type="RailInfo[]">
+  Array of rail information
+</ResponseField>
+
+```typescript
+const rails = await synapse.payments.getRailsAsPayer()
+
+rails.forEach(rail => {
+  console.log(`Rail ${rail.railId}: ${rail.payee}`)
+})
+```
+
+### `getRailsAsPayee()`
+
+Get all rails where the wallet is the payee.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="token" type="TokenIdentifier" default="USDFC">
+      Token to filter by
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="rails" type="RailInfo[]">
+  Array of rail information
+</ResponseField>
+
+```typescript
+const rails = await synapse.payments.getRailsAsPayee()
+```
+
+## Settlement Operations
+
+### `settle()`
+
+Settle a payment rail up to a specific epoch.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="railId" type="bigint" required>
+      Rail ID to settle
+    </ParamField>
+    
+    <ParamField path="untilEpoch" type="bigint">
+      Epoch to settle up to (defaults to current)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.settle({ railId: 1n })
+
+// Partial settlement to past epoch
+const txHash = await synapse.payments.settle({
+  railId: 1n,
+  untilEpoch: 1000n
+})
+```
+
+### `getSettlementAmounts()`
+
+Preview settlement amounts without executing (read-only).
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="railId" type="bigint" required>
+      Rail ID
+    </ParamField>
+    
+    <ParamField path="untilEpoch" type="bigint">
+      Epoch to settle up to
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="SettlementResult">
+  Settlement details:
+  - `totalSettledAmount` - Total amount settled
+  - `totalNetPayeeAmount` - Amount to payee after fees
+  - `totalOperatorCommission` - Operator commission
+  - `totalNetworkFee` - Network fee
+  - `finalSettledEpoch` - Final epoch settled
+  - `note` - Settlement note
+</ResponseField>
+
+```typescript
+const amounts = await synapse.payments.getSettlementAmounts({
+  railId: 1n
+})
+
+console.log('Will settle:', amounts.totalSettledAmount)
+console.log('Payee gets:', amounts.totalNetPayeeAmount)
+console.log('Commission:', amounts.totalOperatorCommission)
+```
+
+### `settleTerminatedRail()`
+
+Emergency settlement for terminated rails (bypasses validation).
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="railId" type="bigint" required>
+      Terminated rail ID
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await synapse.payments.settleTerminatedRail({
+  railId: 1n
+})
+```
+
+### `settleAuto()`
+
+Automatically detect rail status and settle appropriately.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="railId" type="bigint" required>
+      Rail ID
+    </ParamField>
+    
+    <ParamField path="untilEpoch" type="bigint">
+      Epoch for active rails
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+// Automatically uses settleTerminatedRail or settle
+const txHash = await synapse.payments.settleAuto({ railId: 1n })
+```
+
+## Complete Example
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { parseUnits, formatUnits } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY)
+const synapse = Synapse.create({ account, chain: calibration })
+
+// Check wallet balance
+const walletBalance = await synapse.payments.walletBalance({ 
+  token: 'USDFC' 
+})
+console.log('Wallet:', formatUnits(walletBalance, 18), 'USDFC')
+
+// Deposit funds
+const depositTx = await synapse.payments.deposit({
+  amount: parseUnits('100', 18),
+  onApprovalTransaction: (tx) => console.log('Approving...', tx),
+  onDepositStarting: () => console.log('Depositing...')
+})
+console.log('Deposited:', depositTx)
+
+// Check contract balance
+const balance = await synapse.payments.balance()
+console.log('Contract balance:', formatUnits(balance, 18), 'USDFC')
+
+// Approve storage service
+const approval = await synapse.payments.serviceApproval()
+if (!approval.isApproved) {
+  const approveTx = await synapse.payments.approveService({
+    rateAllowance: parseUnits('10', 18),
+    lockupAllowance: parseUnits('50', 18)
+  })
+  console.log('Service approved:', approveTx)
+}
+
+// Check rails
+const rails = await synapse.payments.getRailsAsPayer()
+console.log('Active rails:', rails.length)
+
+for (const rail of rails) {
+  // Preview settlement
+  const amounts = await synapse.payments.getSettlementAmounts({
+    railId: rail.railId
+  })
+  console.log(`Rail ${rail.railId} owes:`, 
+    formatUnits(amounts.totalSettledAmount, 18))
+}
+```
+
+## See Also
+
+- [Deposit Guide](/guides/payment-management) - Funding your account
+- [Payment Rails](/contracts/filecoin-pay) - Understanding rails
+- [Operator Approvals](/guides/payment-management) - Service permissions

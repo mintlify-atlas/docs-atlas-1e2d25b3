@@ -1,0 +1,486 @@
+---
+title: Provider Selection
+description: How Synapse SDK selects storage providers for your uploads
+---
+
+# Provider Selection
+
+The SDK automatically selects storage providers based on endorsement status, availability, and metadata matching. Understanding provider selection helps you optimize uploads and troubleshoot issues.
+
+## Provider Types
+
+Filecoin Onchain Cloud uses a two-tier provider system:
+
+### Endorsed Providers
+
+Curated, high-quality storage providers:
+- **Manual vetting**: Reviewed by the FilOzone team
+- **Higher reliability**: Subject to stricter SLAs
+- **Primary role**: Always used for the first copy
+- **Smaller set**: More exclusive list
+
+### Approved Providers
+
+Pass automated quality checks:
+- **Automated verification**: Quality metrics from on-chain data
+- **Broader selection**: Larger pool of providers
+- **Secondary role**: Used for additional copies
+- **Includes endorsed**: All endorsed providers are also approved
+
+<Info>
+  Think of it as: Endorsed ⊆ Approved. The endorsed set is a strict subset of approved providers.
+</Info>
+
+## Default Selection
+
+When you call `upload()` without options, the SDK:
+
+<Steps>
+  <Step title="Select Primary (Endorsed)">
+    Choose 1 provider from the endorsed list:
+    ```typescript
+    const endorsedProviders = await getEndorsedProviders()
+    const primary = randomSelect(endorsedProviders)
+    ```
+    
+    Random selection distributes load across endorsed providers.
+  </Step>
+  
+  <Step title="Select Secondaries (Approved)">
+    Choose N-1 providers from the approved list:
+    ```typescript
+    const approvedProviders = await getApprovedProviders()
+    const secondaries = randomSelect(
+      approvedProviders,
+      count - 1,
+      { exclude: [primary.id] }
+    )
+    ```
+    
+    Secondaries are chosen from approved providers, excluding the primary.
+  </Step>
+  
+  <Step title="Match Metadata (Optional)">
+    If metadata is provided, prefer providers with matching data sets:
+    ```typescript
+    const contexts = await synapse.storage.createContexts({
+      metadata: { category: 'videos' },
+    })
+    // Reuses existing data sets with matching metadata
+    ```
+  </Step>
+</Steps>
+
+### Example: Auto-Selection
+
+```typescript
+const result = await synapse.storage.upload(data)
+
+// SDK automatically selected:
+// - 1 endorsed provider (primary)
+// - 1 approved provider (secondary)
+
+for (const copy of result.copies) {
+  console.log(`${copy.role}: Provider ${copy.providerId}`)
+}
+// Output:
+// primary: Provider 123
+// secondary: Provider 456
+```
+
+## Manual Provider Selection
+
+Override automatic selection with explicit choices:
+
+### By Provider IDs
+
+Specify exact providers to use:
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  providerIds: [123n, 456n],
+})
+
+// Uses providers 123 and 456 exactly
+// First in list becomes primary
+// No retries on failure (explicit = user's choice)
+```
+
+<Warning>
+  With explicit `providerIds`, the SDK disables automatic retries. If these providers fail, the upload fails.
+</Warning>
+
+### By Data Set IDs
+
+Reuse existing data sets (and their providers):
+
+```typescript
+// Find your existing data sets
+const dataSets = await synapse.storage.findDataSets()
+
+for (const ds of dataSets) {
+  console.log(`Dataset ${ds.dataSetId}: Provider ${ds.providerId}`)
+}
+
+// Use specific data sets
+const result = await synapse.storage.upload(data, {
+  dataSetIds: [dataSets[0].dataSetId, dataSets[1].dataSetId],
+})
+
+// Pieces added to these existing data sets
+// More efficient - batches pieces into same dataset
+```
+
+**Benefits**:
+- Reduces on-chain transactions
+- Groups related data together
+- Predictable provider assignment
+
+### Exclude Providers
+
+Avoid specific providers:
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 2,
+  excludeProviderIds: [999n, 888n],
+})
+
+// Auto-selects providers, but never uses 999 or 888
+// Useful for excluding problematic providers
+```
+
+## Metadata Matching
+
+The SDK can match and reuse data sets based on metadata:
+
+### How It Works
+
+<Steps>
+  <Step title="Provide Metadata">
+    Specify metadata when creating contexts:
+    ```typescript
+    const contexts = await synapse.storage.createContexts({
+      metadata: { category: 'documents', project: 'alpha' },
+    })
+    ```
+  </Step>
+  
+  <Step title="Match Existing Data Sets">
+    The SDK queries your existing data sets and looks for exact metadata matches:
+    ```typescript
+    // Finds data sets where:
+    // - payer = your wallet
+    // - metadata.category = 'documents'
+    // - metadata.project = 'alpha'
+    ```
+  </Step>
+  
+  <Step title="Reuse or Create">
+    - **Match found**: Reuse the data set and provider
+    - **No match**: Create a new data set with this metadata
+  </Step>
+</Steps>
+
+### Example: Metadata-Based Grouping
+
+```typescript
+// Upload multiple files to the same providers
+const metadata = { project: 'website', env: 'production' }
+
+const file1 = await synapse.storage.upload(data1, { metadata })
+const file2 = await synapse.storage.upload(data2, { metadata })
+const file3 = await synapse.storage.upload(data3, { metadata })
+
+// All three files go to the same providers (metadata match)
+// Efficient - pieces grouped into same data sets
+```
+
+### CDN Metadata
+
+The `withCDN` option sets special metadata:
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  withCDN: true,
+})
+
+// Equivalent to:
+const result = await synapse.storage.upload(data, {
+  metadata: { withCDN: '' },
+})
+
+// Enables FilBeam CDN for this data set
+```
+
+<Note>
+  The `withCDN` key in metadata has an empty string value by convention. The contract only checks for key presence.
+</Note>
+
+## Provider Discovery
+
+Query available providers programmatically:
+
+### Get All Providers
+
+```typescript
+const info = await synapse.storage.getStorageInfo()
+
+console.log('Available providers:', info.providers.length)
+
+for (const provider of info.providers) {
+  console.log('Provider', provider.id)
+  console.log('  Address:', provider.serviceProvider)
+  console.log('  PDP URL:', provider.pdp.serviceURL)
+  console.log('  Indexed:', provider.pdp.indexed)
+}
+```
+
+### Get Provider Details
+
+```typescript
+// By ID
+const provider = await synapse.getProviderInfo(123n)
+
+// By address
+const provider = await synapse.getProviderInfo('0x...')
+
+console.log('Provider info:')
+console.log('  ID:', provider.id)
+console.log('  Service Provider:', provider.serviceProvider)
+console.log('  Payee:', provider.payee)
+console.log('  PDP Service URL:', provider.pdp.serviceURL)
+console.log('  Indexed:', provider.pdp.indexed)
+```
+
+### Using synapse-core
+
+For low-level access:
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import * as SPRegistry from '@filoz/synapse-core/sp-registry'
+import { createPublicClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const client = createPublicClient({
+  chain: calibration,
+  transport: http(),
+})
+
+// Get approved provider IDs
+const approvedIds = await WarmStorage.getApprovedProviders(client, {
+  offset: 0n,
+  limit: 100n,
+})
+
+// Get endorsed provider IDs
+const endorsedIds = await WarmStorage.getEndorsedProviders(client)
+
+// Get provider details
+const provider = await SPRegistry.getProvider(client, {
+  providerId: 123n,
+})
+```
+
+## Selection Algorithms
+
+### Three Mutually Exclusive Modes
+
+The `createContexts()` method has three modes (you can only use one):
+
+**Mode 1: Explicit Data Sets**
+```typescript
+const contexts = await synapse.storage.createContexts({
+  dataSetIds: [100n, 200n, 300n],
+})
+// Uses exactly these data sets and their providers
+```
+
+**Mode 2: Explicit Providers**
+```typescript
+const contexts = await synapse.storage.createContexts({
+  providerIds: [123n, 456n, 789n],
+})
+// Uses exactly these providers
+// Finds or creates matching data sets
+```
+
+**Mode 3: Smart Selection**
+```typescript
+const contexts = await synapse.storage.createContexts({
+  count: 3,
+  metadata: { category: 'videos' },
+  excludeProviderIds: [999n],
+})
+// Auto-selects 3 providers:
+// - 1 endorsed (primary)
+// - 2 approved (secondaries)
+// - Matches metadata if possible
+// - Excludes provider 999
+```
+
+<Warning>
+  Mixing modes throws an error. For example, you cannot specify both `dataSetIds` and `providerIds`.
+</Warning>
+
+### Smart Selection Logic
+
+```text
+1. Fetch provider lists:
+   - Endorsed providers from contract
+   - Approved providers from contract
+
+2. Fetch client's data sets (for metadata matching)
+
+3. Select primary (endorsed):
+   - Filter endorsed providers by metadata match (if applicable)
+   - Exclude any providers in excludeProviderIds
+   - Random select from remaining
+
+4. Select secondaries (approved):
+   - Filter approved providers
+   - Exclude primary
+   - Exclude any in excludeProviderIds
+   - Filter by metadata match (if applicable)
+   - Random select remaining slots
+
+5. For each selected provider:
+   - Find existing data set with matching metadata
+   - If found: reuse that data set
+   - If not: new data set will be created on commit
+```
+
+## Provider Health
+
+Currently, provider selection is random within the endorsed/approved sets. Future versions may include:
+- **Health scoring**: Prefer providers with better uptime
+- **Geographic distribution**: Spread copies across regions
+- **Cost optimization**: Choose cheaper providers for secondaries
+- **Performance metrics**: Prefer faster providers
+
+<Info>
+  Provider selection is being actively improved. Follow the [Synapse SDK releases](https://github.com/FilOzone/synapse-sdk/releases) for updates.
+</Info>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use metadata for organization">
+    Group related data with consistent metadata:
+    ```typescript
+    const projectMetadata = { project: 'app', env: 'prod' }
+    
+    await synapse.storage.upload(config, { metadata: projectMetadata })
+    await synapse.storage.upload(assets, { metadata: projectMetadata })
+    
+    // Both go to the same providers and data sets
+    ```
+  </Accordion>
+  
+  <Accordion title="Let the SDK choose providers">
+    Unless you have specific requirements, let the SDK auto-select:
+    ```typescript
+    // Good (auto-select with retries)
+    await synapse.storage.upload(data, { count: 2 })
+    
+    // Only if needed (no retries, no fallback)
+    await synapse.storage.upload(data, { providerIds: [123n, 456n] })
+    ```
+  </Accordion>
+  
+  <Accordion title="Exclude problematic providers">
+    If a provider consistently fails:
+    ```typescript
+    const KNOWN_BAD = [999n, 888n]
+    
+    await synapse.storage.upload(data, {
+      excludeProviderIds: KNOWN_BAD,
+    })
+    ```
+  </Accordion>
+  
+  <Accordion title="Reuse data sets for batches">
+    When uploading multiple related files:
+    ```typescript
+    const dataSets = await synapse.storage.findDataSets()
+    const projectDataSet = dataSets.find(
+      ds => ds.metadata.project === 'myapp'
+    )
+    
+    if (projectDataSet) {
+      // Add new files to existing data set
+      await synapse.storage.upload(data, {
+        dataSetIds: [projectDataSet.dataSetId],
+      })
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### "No approved service providers available"
+
+This error means no providers are available after filtering:
+
+```typescript
+// Too many exclusions?
+const approvedIds = await synapse.storage.getStorageInfo()
+console.log('Total approved:', approvedIds.providers.length)
+
+// Don't exclude all providers
+await synapse.storage.upload(data, {
+  excludeProviderIds: [1n, 2n, 3n, ...], // Too many!
+})
+```
+
+**Solution**: Reduce exclusions or check network health.
+
+### Metadata not matching
+
+If metadata matching isn't working:
+
+```typescript
+// Check exact metadata format
+const dataSets = await synapse.storage.findDataSets()
+
+for (const ds of dataSets) {
+  console.log('Dataset', ds.dataSetId)
+  console.log('Metadata:', JSON.stringify(ds.metadata, null, 2))
+}
+
+// Metadata must match exactly (key and value)
+const metadata = { category: 'docs' } // Not 'documents'
+```
+
+### Provider selection is slow
+
+Provider selection involves contract calls. To reduce latency:
+
+```typescript
+// Create contexts once, reuse many times
+const contexts = await synapse.storage.createContexts({ count: 2 })
+
+for (const file of files) {
+  await synapse.storage.upload(file, { contexts })
+}
+// Contexts are cached automatically
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Session Keys" icon="key" href="/concepts/session-keys">
+    Use delegated signing for provider operations
+  </Card>
+  <Card title="Storage Operations" icon="database" href="/guides/storage-operations">
+    Practical upload and download examples
+  </Card>
+  <Card title="Provider Registry" icon="server" href="/guides/provider-registry">
+    Query and work with the provider registry
+  </Card>
+  <Card title="Multi-Copy Upload" icon="copy" href="/concepts/multi-copy-upload">
+    Learn about redundancy and failure handling
+  </Card>
+</CardGroup>

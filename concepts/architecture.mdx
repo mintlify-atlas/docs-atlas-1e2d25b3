@@ -1,0 +1,413 @@
+---
+title: Architecture
+description: Understanding the Synapse SDK architecture and design principles
+---
+
+# Architecture Overview
+
+Synapse SDK is built with a layered architecture that separates high-level application APIs from low-level protocol interactions. Understanding this structure helps you use the SDK effectively and troubleshoot issues.
+
+## System Architecture
+
+The Filecoin Onchain Cloud stack consists of multiple layers:
+
+```text
+┌────────────────────────────────────┐
+│        Your Application             │
+│   (Node.js, Browser, React, etc)   │
+└─────────────┬───────────────────────┘
+              │
+   ┌──────────┴───────────┐
+   │  @filoz/synapse-sdk   │  (High-level API)
+   │  - Synapse class      │
+   │  - StorageManager     │
+   │  - PaymentsService    │
+   │  - Auto provider sel. │
+   └──────────┬───────────┘
+              │
+   ┌──────────┴───────────┐
+   │  @filoz/synapse-core  │  (Protocol layer)
+   │  - Contract actions   │
+   │  - EIP-712 signing    │
+   │  - PieceCID utils     │
+   │  - Session keys       │
+   └──────────┬───────────┘
+              │
+    ┌─────────┴──────────┐
+    │      viem           │  (Ethereum/Filecoin client)
+    └─────────┬──────────┘
+              │
+    ┌─────────┴───────────────────────────────────────┐
+    │           Filecoin Infrastructure                  │
+    │                                                     │
+    │  ┌────────────────────────────────────────┐  │
+    │  │        Smart Contracts                    │  │
+    │  │  - FilecoinWarmStorageService (FWSS)   │  │
+    │  │  - Filecoin Pay                        │  │
+    │  │  - PDPVerifier                         │  │
+    │  │  - ServiceProviderRegistry             │  │
+    │  └────────────────────────────────────────┘  │
+    │                                                     │
+    │  ┌────────────────────────────────────────┐  │
+    │  │       Storage Providers               │  │
+    │  │  - Curio HTTP API (PDP endpoints)     │  │
+    │  │  - SP-to-SP piece transfers            │  │
+    │  │  - Piece storage & retrieval           │  │
+    │  └────────────────────────────────────────┘  │
+    │                                                     │
+    │  ┌────────────────────────────────────────┐  │
+    │  │         CDN (Optional)                │  │
+    │  │  - FilBeam CDN                         │  │
+    │  │  - Cache & egress metering             │  │
+    │  └────────────────────────────────────────┘  │
+    └─────────────────────────────────────────────────┘
+```
+
+## SDK Package Structure
+
+The SDK is organized into focused modules:
+
+### @filoz/synapse-sdk
+
+High-level SDK for application developers.
+
+```text
+packages/synapse-sdk/src/
+├── synapse.ts              # Main Synapse class
+├── types.ts                # TypeScript interfaces
+├── storage/
+│   ├── manager.ts          # StorageManager (multi-copy orchestration)
+│   └── context.ts          # StorageContext (per-provider operations)
+├── payments/
+│   └── service.ts          # PaymentsService (deposits, withdrawals)
+├── warm-storage/
+│   └── service.ts          # WarmStorageService (contracts wrapper)
+├── sp-registry/
+│   └── service.ts          # SPRegistryService (provider discovery)
+├── filbeam/
+│   └── service.ts          # FilBeamService (CDN integration)
+├── errors/
+│   ├── index.ts
+│   └── storage.ts          # StoreError, CommitError
+└── utils/
+    ├── constants.ts        # Contract addresses, ABIs
+    ├── errors.ts           # SynapseError base class
+    ├── metadata.ts
+    └── network.ts
+```
+
+### @filoz/synapse-core
+
+Low-level protocol library built on viem.
+
+```text
+packages/synapse-core/src/
+├── chains.ts               # Chain definitions (mainnet, calibration)
+├── sp/                     # Curio HTTP API client
+│   ├── sp.ts               # PDP API calls
+│   └── pull.ts             # SP-to-SP transfer
+├── piece/                  # PieceCID utilities
+├── typed-data/             # EIP-712 signing
+│   ├── create-data-set.ts
+│   ├── add-pieces.ts
+│   └── ...
+├── warm-storage/           # FWSS contract actions
+├── pay/                    # Filecoin Pay actions
+├── pdp-verifier/           # PDPVerifier reads
+├── sp-registry/            # Provider registry
+├── session-key/            # Session key management
+└── utils/                  # Helpers, metadata, formatting
+```
+
+## Core Classes
+
+### Synapse
+
+Main entry point providing unified access to all services.
+
+**File**: `packages/synapse-sdk/src/synapse.ts`
+
+```typescript
+class Synapse {
+  // Factory method
+  static create(options: SynapseOptions): Synapse
+  
+  // Service accessors
+  get storage(): StorageManager
+  get payments(): PaymentsService
+  get providers(): SPRegistryService
+  get filbeam(): FilBeamService
+  
+  // Client access
+  get client(): Client
+  get sessionClient(): Client | undefined
+  get chain(): Chain
+}
+```
+
+**Key Features:**
+- Auto-detects network from chain ID
+- Manages service instances
+- Handles session key delegation
+- Provides unified error handling
+
+### StorageManager
+
+Orchestrates multi-copy uploads and SP-agnostic downloads.
+
+**File**: `packages/synapse-sdk/src/storage/manager.ts`
+
+```typescript
+class StorageManager {
+  // High-level upload (auto-manages contexts)
+  async upload(data, options?): Promise<UploadResult>
+  
+  // SP-agnostic download
+  async download(options): Promise<Uint8Array>
+  
+  // Context management
+  async createContext(options?): Promise<StorageContext>
+  async createContexts(options?): Promise<StorageContext[]>
+  
+  // Utilities
+  async preflightUpload(options): Promise<PreflightInfo>
+  async findDataSets(options?): Promise<EnhancedDataSetInfo[]>
+  async terminateDataSet(options): Promise<Hash>
+  async getStorageInfo(): Promise<StorageInfo>
+}
+```
+
+**Responsibilities:**
+- Provider selection (endorsed primary + approved secondaries)
+- Multi-copy orchestration (store → pull → commit)
+- Failure handling and retries
+- Context caching and reuse
+
+### StorageContext
+
+Represents a specific provider + data set pair.
+
+**File**: `packages/synapse-sdk/src/storage/context.ts`
+
+```typescript
+class StorageContext {
+  // Properties
+  readonly provider: PDPProvider
+  readonly dataSetId: bigint | undefined
+  readonly dataSetMetadata: Record<string, string>
+  
+  // Split operations
+  async store(data, options?): Promise<StoreResult>
+  async pull(options): Promise<PullResult>
+  async commit(options): Promise<CommitResult>
+  
+  // Convenience
+  async upload(data, options?): Promise<UploadResult>
+  async download(options): Promise<Uint8Array>
+  
+  // Signing
+  async presignForCommit(pieces): Promise<Hex>
+  
+  // Utilities
+  getPieceUrl(pieceCid): string
+}
+```
+
+**Use Cases:**
+- Fine-grained control over upload flow
+- Multiple files to same provider (batch commits)
+- Custom provider selection
+- Split operations for efficiency
+
+### PaymentsService
+
+Manages deposits, withdrawals, and operator approvals.
+
+**File**: `packages/synapse-sdk/src/payments/service.ts`
+
+```typescript
+class PaymentsService {
+  // Balances
+  async balance(options?): Promise<bigint>
+  async walletBalance(options?): Promise<bigint>
+  async accountInfo(options?): Promise<AccountInfo>
+  
+  // Deposits
+  async deposit(options): Promise<Hash>
+  async depositWithPermit(options): Promise<Hash>
+  async depositWithPermitAndApproveOperator(options): Promise<Hash>
+  
+  // Withdrawals
+  async withdraw(options): Promise<Hash>
+  
+  // Operator approvals
+  async setOperatorApproval(options): Promise<Hash>
+  async serviceApproval(): Promise<ApprovalInfo>
+  
+  // Payment rails
+  async getRail(options): Promise<RailInfo | null>
+}
+```
+
+## Data Flow
+
+Understanding how data flows through the system:
+
+### Upload Flow
+
+```text
+1. Client calls synapse.storage.upload(data)
+   │
+   ↓
+2. StorageManager.upload()
+   ├─ Creates/selects StorageContexts (primary + secondaries)
+   ├─ Calls primary.store(data)
+   │  ├─ Calculates PieceCID
+   │  ├─ POST /pdp/piece/uploads (Curio API)
+   │  ├─ PUT /pdp/piece/uploads/{uuid} (stream data)
+   │  └─ POST /pdp/piece/uploads/{uuid} (finalize)
+   │
+   ├─ For each secondary:
+   │  ├─ Calls secondary.presignForCommit() → EIP-712 signature
+   │  ├─ Calls secondary.pull()
+   │  │  └─ POST /pdp/piece/pull (SP fetches from primary)
+   │  └─ On failure: retry with different provider
+   │
+   └─ Commit all in parallel:
+      ├─ primary.commit() → CreateDataSetAndAddPieces transaction
+      └─ secondary.commit() → AddPieces transaction
+         │
+         ↓
+      Smart Contract Flow:
+      ├─ FWSS.createDataSetAndAddPieces() or addPieces()
+      │  ├─ Validates EIP-712 signature
+      │  ├─ Creates/updates data set
+      │  └─ Calls PDPVerifier.submitProofSet()
+      │
+      └─ PDPVerifier callback → FWSS
+         ├─ Creates payment rails (PDP + optional CDN)
+         └─ Starts continuous epoch-based payments
+```
+
+### Download Flow
+
+```text
+1. Client calls synapse.storage.download({ pieceCid })
+   │
+   ↓
+2. StorageManager.download()
+   ├─ Resolves piece URL from:
+   │  ├─ FilBeam CDN (if withCDN=true)
+   │  ├─ On-chain data sets
+   │  └─ Cached provider list
+   │
+   ├─ GET {pieceUrl} (HTTP request)
+   ├─ Streams response body
+   ├─ Validates PieceCID
+   └─ Returns Uint8Array
+```
+
+## Contract Interactions
+
+### Smart Contract Architecture
+
+**Base Layer**: Filecoin Pay
+- Generic payment rails (deposits, withdrawals, operator approvals)
+- Rate-based continuous payments
+- Settlement and accounting
+
+**Service Layer**: FilecoinWarmStorageService (FWSS)
+- Client authentication via EIP-712
+- Provider whitelist management
+- Payment rail creation
+- PDPListener callbacks
+- Split into main contract (writes) + StateView (reads)
+
+**Protocol Layer**: PDPVerifier
+- Neutral proof verification
+- No business logic
+- Delegates to service contracts via callbacks
+- Curio only talks to PDPVerifier
+
+**Discovery**: ServiceProviderRegistry
+- Provider registration and metadata
+- Product offerings
+- Endorsed vs approved providers
+
+### Transaction Flow
+
+```text
+Client signs EIP-712 for FWSS
+  ↓
+Curio includes signature in extraData
+  ↓
+Curio calls PDPVerifier.submitProofSet(extraData)
+  ↓
+PDPVerifier calls FWSS callback
+  ↓
+FWSS validates signature & manages payments
+```
+
+## Design Principles
+
+### 1. Simple Golden Path
+
+The main `Synapse` class provides the simplest API:
+
+```typescript
+const synapse = Synapse.create({ chain, transport, account })
+const result = await synapse.storage.upload(data)
+```
+
+### 2. Composable Components
+
+All services are exported independently for flexibility:
+
+```typescript
+import { PaymentsService } from '@filoz/synapse-sdk/payments'
+import { StorageContext } from '@filoz/synapse-sdk/storage'
+```
+
+### 3. Environment Agnostic
+
+No Node.js-specific APIs:
+- Uses `ReadableStream` instead of Node streams
+- Uses `fetch` instead of `http`/`https`
+- No `Buffer`, `fs`, `path`, or `process`
+- Works in browsers and Node.js
+
+### 4. Type Safety
+
+Full TypeScript support with strict types:
+- All options are typed
+- Return values are precisely typed
+- Error types are exported
+
+### 5. Failure Transparency
+
+Individual failures don't throw; they're reported:
+
+```typescript
+const result = await synapse.storage.upload(data, { count: 3 })
+// result.copies = [success1, success2]
+// result.failures = [{ providerId, error, role }]
+```
+
+Only total failure throws.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Storage Pipeline" icon="diagram-project" href="/concepts/storage-pipeline">
+    Learn the store → pull → commit flow in detail
+  </Card>
+  <Card title="Multi-Copy Upload" icon="copy" href="/concepts/multi-copy-upload">
+    Understand how redundancy works
+  </Card>
+  <Card title="Provider Selection" icon="server" href="/concepts/provider-selection">
+    How the SDK chooses storage providers
+  </Card>
+  <Card title="Session Keys" icon="key" href="/concepts/session-keys">
+    Delegated signing without exposing your main wallet
+  </Card>
+</CardGroup>

@@ -1,0 +1,271 @@
+---
+title: 'Session Keys'
+description: 'Delegated signing with scoped permissions'
+---
+
+## Overview
+
+Session keys enable delegated signing without exposing the main wallet. They are disposable keys with constrained permissions for specific actions.
+
+```typescript
+import * as SessionKey from '@filoz/synapse-core/session-key'
+```
+
+## Creating Session Keys
+
+### `fromSecp256k1()`
+
+Create a session key from a secp256k1 private key.
+
+```typescript
+import * as SessionKey from '@filoz/synapse-core/session-key'
+import { privateKeyToAccount } from 'viem/accounts'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const rootAccount = privateKeyToAccount('0x...') // Main wallet
+const sessionPrivateKey = '0x...' // Disposable key
+
+const sessionKey = SessionKey.fromSecp256k1({
+  privateKey: sessionPrivateKey,
+  root: rootAccount,
+  chain: calibration
+})
+
+console.log('Session key address:', sessionKey.address)
+console.log('Root address:', sessionKey.rootAddress)
+```
+
+## Permissions
+
+### Default FWSS Permissions
+
+```typescript
+import * as SessionKey from '@filoz/synapse-core/session-key'
+
+// Required permissions for storage operations
+const permissions = SessionKey.DefaultFwssPermissions
+// ['CreateDataSet', 'AddPieces', 'SchedulePieceRemovals']
+```
+
+### Check Permissions
+
+```typescript
+if (sessionKey.hasPermission('CreateDataSet')) {
+  console.log('Can create datasets')
+}
+
+if (sessionKey.hasPermissions(SessionKey.DefaultFwssPermissions)) {
+  console.log('Has all required FWSS permissions')
+}
+```
+
+## Registration and Lifecycle
+
+### `login()`
+
+Register a session key on-chain.
+
+```typescript
+import * as SessionKey from '@filoz/synapse-core/session-key'
+
+const txHash = await SessionKey.login(rootClient, {
+  address: sessionKey.address
+})
+
+console.log('Session key registered:', txHash)
+```
+
+### `loginSync()`
+
+Register and wait for confirmation.
+
+```typescript
+const { receipt, event } = await SessionKey.loginSync(rootClient, {
+  address: sessionKey.address,
+  onHash: (hash) => console.log('Tx:', hash)
+})
+
+console.log('Registered at block:', receipt.blockNumber)
+console.log('Event:', event.args)
+```
+
+### `revoke()`
+
+Revoke a session key.
+
+```typescript
+const txHash = await SessionKey.revoke(rootClient, {
+  address: sessionKey.address
+})
+```
+
+### `revokeSync()`
+
+Revoke and wait for confirmation.
+
+```typescript
+const { receipt, event } = await SessionKey.revokeSync(rootClient, {
+  address: sessionKey.address,
+  onHash: (hash) => console.log('Revoke tx:', hash)
+})
+```
+
+## Connection Management
+
+### `connect()`
+
+Connect to watch authorization updates.
+
+```typescript
+await sessionKey.connect()
+console.log('Connected and watching for updates')
+```
+
+### `disconnect()`
+
+Stop watching for updates.
+
+```typescript
+sessionKey.disconnect()
+```
+
+## Events
+
+```typescript
+sessionKey.on('expirationsUpdated', (e) => {
+  console.log('New expirations:', e.detail)
+})
+
+sessionKey.on('connected', (e) => {
+  console.log('Connected:', e.detail)
+})
+
+sessionKey.on('disconnected', () => {
+  console.log('Disconnected')
+})
+
+sessionKey.on('error', (e) => {
+  console.error('Error:', e.detail)
+})
+```
+
+## Using with Synapse
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import * as SessionKey from '@filoz/synapse-core/session-key'
+import { privateKeyToAccount } from 'viem/accounts'
+import { createWalletClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const rootAccount = privateKeyToAccount(process.env.ROOT_KEY)
+const sessionPrivateKey = process.env.SESSION_KEY
+
+// Create root client
+const rootClient = createWalletClient({
+  account: rootAccount,
+  chain: calibration,
+  transport: http()
+})
+
+// Create session key
+const sessionKey = SessionKey.fromSecp256k1({
+  privateKey: sessionPrivateKey,
+  root: rootAccount,
+  chain: calibration
+})
+
+// Register session key
+const { receipt } = await SessionKey.loginSync(rootClient, {
+  address: sessionKey.address,
+  onHash: (hash) => console.log('Registration tx:', hash)
+})
+
+console.log('Session key registered')
+
+// Connect to watch for updates
+await sessionKey.connect()
+
+// Create Synapse with session key
+const synapse = Synapse.create({
+  account: rootAccount,
+  chain: calibration,
+  sessionKey // Passed here
+})
+
+// All operations use session key for signing
+const result = await synapse.storage.upload(data)
+console.log('Uploaded using session key')
+
+// Cleanup
+sessionKey.disconnect()
+
+// Later: revoke session key
+await SessionKey.revokeSync(rootClient, {
+  address: sessionKey.address
+})
+console.log('Session key revoked')
+```
+
+## Security Best Practices
+
+1. **Use Unique Keys**: Generate fresh session keys per application/device
+2. **Revoke When Done**: Always revoke session keys when no longer needed
+3. **Monitor Permissions**: Check permissions before operations
+4. **Rotate Regularly**: Create new session keys periodically
+5. **Secure Storage**: Store session key separately from root key
+
+## Complete Workflow
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import * as SessionKey from '@filoz/synapse-core/session-key'
+import { generatePrivateKey } from 'viem/accounts'
+
+// 1. Generate disposable key
+const sessionPrivateKey = generatePrivateKey()
+
+// 2. Create session key
+const sessionKey = SessionKey.fromSecp256k1({
+  privateKey: sessionPrivateKey,
+  root: rootAccount,
+  chain: calibration
+})
+
+// 3. Register on-chain (root wallet signs)
+await SessionKey.loginSync(rootClient, {
+  address: sessionKey.address
+})
+
+// 4. Connect and sync
+await sessionKey.connect()
+
+// 5. Verify permissions
+if (!sessionKey.hasPermissions(SessionKey.DefaultFwssPermissions)) {
+  throw new Error('Missing required permissions')
+}
+
+// 6. Use with Synapse
+const synapse = Synapse.create({
+  account: rootAccount,
+  chain: calibration,
+  sessionKey
+})
+
+// 7. Perform operations (session key signs)
+await synapse.storage.upload(data)
+
+// 8. Cleanup
+sessionKey.disconnect()
+
+// 9. Revoke when done
+await SessionKey.revokeSync(rootClient, {
+  address: sessionKey.address
+})
+```
+
+## See Also
+
+- [SessionKeyRegistry Contract](https://github.com/FilOzone/SessionKeyRegistry) - Contract source
+- [Synapse](/api/synapse-class) - Using session keys with SDK
+- [Security Guide](/guides/session-keys) - Best practices

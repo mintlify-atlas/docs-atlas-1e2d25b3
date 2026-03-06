@@ -1,0 +1,243 @@
+---
+title: 'PieceCID'
+description: 'Content-addressable identifiers for Filecoin pieces'
+---
+
+## Overview
+
+The `@filoz/synapse-core/piece` module provides utilities for working with Filecoin PieceCIDs - content-addressable identifiers for data pieces.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+```
+
+## PieceCID Format
+
+A PieceCID is a CID (Content Identifier) with a specific structure:
+- **Padding**: Variable-length uvarint
+- **Height**: uint8 (merkle tree height)
+- **Root Hash**: 32-byte piece data merkle root
+
+<Note>
+**Contract Digest**
+
+Contracts expect only the last 32 bytes (the root hash), not the full CID.
+</Note>
+
+## Core Functions
+
+### `calculate()`
+
+Calculate PieceCID from data.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const data = new Uint8Array([1, 2, 3, 4])
+const pieceCid = Piece.calculate(data)
+
+console.log('PieceCID:', pieceCid.toString())
+// baga6ea4seaq...
+```
+
+### `asPieceCID()`
+
+Validate and convert string to PieceCID.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const cid = 'baga6ea4seaq...'
+const pieceCid = Piece.asPieceCID(cid)
+
+if (pieceCid) {
+  console.log('Valid PieceCID')
+} else {
+  console.error('Invalid format')
+}
+```
+
+### `createPieceCIDStream()`
+
+Calculate PieceCID from a stream.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const fileStream = readableStream // ReadableStream<Uint8Array>
+
+const { pieceCid, size } = await Piece.createPieceCIDStream(fileStream)
+
+console.log('Stream PieceCID:', pieceCid.toString())
+console.log('Stream size:', size)
+```
+
+## URL Construction
+
+### `createPieceUrlPDP()`
+
+Create a retrieval URL for a piece.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const url = Piece.createPieceUrlPDP({
+  cid: pieceCid.toString(),
+  serviceURL: 'https://pdp.provider.com'
+})
+
+console.log('Retrieval URL:', url)
+// https://pdp.provider.com/piece/baga6ea4seaq...
+```
+
+## Download and Validation
+
+### `downloadAndValidate()`
+
+Download a piece and validate its CID.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const data = await Piece.downloadAndValidate({
+  url: 'https://pdp.provider.com/piece/baga6ea4seaq...',
+  expectedPieceCid: pieceCid
+})
+
+console.log('Downloaded and validated:', data.length, 'bytes')
+```
+
+## URL Resolution
+
+### `resolvePieceUrl()`
+
+Resolve a piece URL using multiple strategies.
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const url = await Piece.resolvePieceUrl({
+  client,
+  address: clientAddress,
+  pieceCid,
+  resolvers: [
+    Piece.filbeamResolver,     // Try FilBeam CDN first
+    Piece.chainResolver,       // Then check chain records
+    Piece.providersResolver([  // Finally try known providers
+      { id: 1n, pdp: { serviceURL: 'https://...' } }
+    ])
+  ]
+})
+
+console.log('Resolved URL:', url)
+```
+
+## Digest Extraction
+
+Extract the 32-byte root hash for contracts:
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+const pieceCid = Piece.calculate(data)
+const digest = pieceCid.bytes.slice(-32) // Last 32 bytes
+
+// Use digest in contract calls
+```
+
+## Complete Example
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+import { createPublicClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const client = createPublicClient({
+  chain: calibration,
+  transport: http()
+})
+
+// Calculate PieceCID
+const data = new Uint8Array([1, 2, 3, 4])
+const pieceCid = Piece.calculate(data)
+console.log('PieceCID:', pieceCid.toString())
+
+// Create retrieval URL
+const url = Piece.createPieceUrlPDP({
+  cid: pieceCid.toString(),
+  serviceURL: 'https://pdp.provider.com'
+})
+
+// Download and validate
+try {
+  const retrieved = await Piece.downloadAndValidate({
+    url,
+    expectedPieceCid: pieceCid
+  })
+  console.log('Retrieved:', retrieved.length, 'bytes')
+  
+  // Verify data matches
+  const match = retrieved.every((byte, i) => byte === data[i])
+  console.log('Data matches:', match)
+} catch (error) {
+  console.error('Download failed:', error)
+}
+
+// Resolve URL from multiple sources
+const resolvedUrl = await Piece.resolvePieceUrl({
+  client,
+  address: '0x...',
+  pieceCid,
+  resolvers: [
+    Piece.filbeamResolver,
+    Piece.chainResolver
+  ]
+})
+
+console.log('Resolved from:', resolvedUrl)
+```
+
+## Streaming Example
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+import { createReadStream } from 'fs'
+
+// Read file as stream
+const fileStream = createReadStream('large-file.bin')
+const webStream = Readable.toWeb(fileStream) // Convert to web stream
+
+// Calculate CID from stream
+const { pieceCid, size } = await Piece.createPieceCIDStream(webStream)
+
+console.log('File PieceCID:', pieceCid.toString())
+console.log('File size:', size, 'bytes')
+```
+
+## Validation
+
+```typescript
+import * as Piece from '@filoz/synapse-core/piece'
+
+// Validate string format
+const input = 'baga6ea4seaq...'
+const pieceCid = Piece.asPieceCID(input)
+
+if (!pieceCid) {
+  throw new Error('Invalid PieceCID format')
+}
+
+// Validate downloaded data
+const data = await fetch(url).then(r => r.arrayBuffer())
+const calculated = Piece.calculate(new Uint8Array(data))
+
+if (calculated.toString() !== expected.toString()) {
+  throw new Error('PieceCID mismatch - data corrupted')
+}
+```
+
+## See Also
+
+- [FRC-0069](https://github.com/filecoin-project/FIPs/blob/master/FRCs/frc-0069.md) - PieceCID specification
+- [StorageContext](/api/storage-context) - High-level piece operations
+- [SP Client](/api/core/sp-client) - Using PieceCIDs with providers

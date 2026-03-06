@@ -1,0 +1,344 @@
+---
+title: 'WarmStorageService'
+description: 'Low-level warm storage contract operations'
+---
+
+## Overview
+
+The `WarmStorageService` provides direct access to Filecoin Warm Storage Service (FWSS) contract operations. This is a low-level service used internally by `StorageManager` and `StorageContext`.
+
+Most users should use `StorageManager` instead. This service is exposed for advanced use cases requiring direct contract interaction.
+
+<Note>
+**For most use cases, use `StorageManager` instead.**
+
+This service provides low-level contract access and is primarily used internally by the SDK.
+</Note>
+
+## Data Set Queries
+
+### `getDataSet()`
+
+Get information about a specific data set.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="dataSetId" type="bigint" required>
+      Data set ID to query
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="dataSet" type="object">
+  Data set information including rail IDs, payer, payee, and provider details
+</ResponseField>
+
+```typescript
+const dataSet = await warmStorage.getDataSet({ dataSetId: 1n })
+
+console.log('Provider:', dataSet.providerId)
+console.log('Payer:', dataSet.payer)
+```
+
+### `getClientDataSets()`
+
+Get all data set IDs for a client address.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="address" type="Address" required>
+      Client address to query
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="dataSets" type="DataSetInfo[]">
+  Array of data set information
+</ResponseField>
+
+```typescript
+const dataSets = await warmStorage.getClientDataSets({
+  address: '0x...'
+})
+```
+
+### `getClientDataSetsWithDetails()`
+
+Get enhanced data set information including live status and management details.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="address" type="Address">
+      Client address (defaults to current account)
+    </ParamField>
+    
+    <ParamField path="onlyManaged" type="boolean" default="false">
+      Filter to only data sets managed by this FWSS contract
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="dataSets" type="EnhancedDataSetInfo[]">
+  Enhanced data set information with:
+  - `isLive` - Whether data set is active on-chain
+  - `isManaged` - Whether managed by current FWSS
+  - `activePieceCount` - Number of pieces
+  - `withCDN` - CDN status
+  - `metadata` - Data set metadata
+</ResponseField>
+
+```typescript
+const dataSets = await warmStorage.getClientDataSetsWithDetails({
+  onlyManaged: true
+})
+
+dataSets.forEach(ds => {
+  console.log(`Dataset ${ds.dataSetId}:`)
+  console.log(`  Live: ${ds.isLive}`)
+  console.log(`  Pieces: ${ds.activePieceCount}`)
+  console.log(`  CDN: ${ds.withCDN}`)
+})
+```
+
+## Service Configuration
+
+### `getServicePrice()`
+
+Get current storage service pricing.
+
+<ResponseField name="pricing" type="object">
+  Pricing information:
+  - `pricePerTiBPerMonthNoCDN` - Base storage cost
+  - `pricePerTiBCdnEgress` - CDN egress cost
+  - `pricePerTiBCacheMissEgress` - Cache miss cost
+  - `tokenAddress` - Payment token address
+  - `epochsPerMonth` - Epochs per month
+  - `minimumPricePerMonth` - Minimum monthly charge
+</ResponseField>
+
+```typescript
+const pricing = await warmStorage.getServicePrice()
+
+console.log('Base price/TiB/month:', pricing.pricePerTiBPerMonthNoCDN)
+console.log('CDN egress/TiB:', pricing.pricePerTiBCdnEgress)
+console.log('Token:', pricing.tokenAddress)
+```
+
+### `getPDPConfig()`
+
+Get PDP (Proof of Data Possession) configuration parameters.
+
+<ResponseField name="config" type="object">
+  PDP configuration including:
+  - `maxProvingPeriod` - Maximum epochs between proofs
+  - `challengeWindowSize` - Challenge window duration
+  - Other PDP parameters
+</ResponseField>
+
+```typescript
+const config = await warmStorage.getPDPConfig()
+
+console.log('Max proving period:', config.maxProvingPeriod)
+console.log('Challenge window:', config.challengeWindowSize)
+```
+
+## Provider Management
+
+### `getApprovedProviderIds()`
+
+Get list of approved provider IDs.
+
+<ResponseField name="providerIds" type="bigint[]">
+  Array of approved provider IDs
+</ResponseField>
+
+```typescript
+const providerIds = await warmStorage.getApprovedProviderIds()
+console.log('Approved providers:', providerIds)
+```
+
+### `addApprovedProvider()`
+
+Add a provider to the approved list (admin only).
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="providerId" type="bigint" required>
+      Provider ID to approve
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await warmStorage.addApprovedProvider({
+  providerId: 5n
+})
+```
+
+### `removeApprovedProvider()`
+
+Remove a provider from the approved list (admin only).
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="providerId" type="bigint" required>
+      Provider ID to remove
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await warmStorage.removeApprovedProvider({
+  providerId: 5n
+})
+```
+
+## Data Set Operations
+
+### `validateDataSet()`
+
+Validate that a data set is live and managed by this contract.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="dataSetId" type="bigint" required>
+      Data set ID to validate
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="valid" type="void">
+  Throws if validation fails
+</ResponseField>
+
+```typescript
+try {
+  await warmStorage.validateDataSet({ dataSetId: 1n })
+  console.log('Dataset is valid')
+} catch (error) {
+  console.error('Validation failed:', error.message)
+}
+```
+
+### `getDataSetMetadata()`
+
+Get metadata for a data set.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="dataSetId" type="bigint" required>
+      Data set ID
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="metadata" type="Record<string, string>">
+  Metadata key-value pairs
+</ResponseField>
+
+```typescript
+const metadata = await warmStorage.getDataSetMetadata({
+  dataSetId: 1n
+})
+
+console.log(metadata)
+// { category: 'videos', cdn: '' }
+```
+
+### `getActivePieceCount()`
+
+Get the number of active pieces in a data set.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="dataSetId" type="bigint" required>
+      Data set ID
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="count" type="bigint">
+  Number of active pieces
+</ResponseField>
+
+```typescript
+const count = await warmStorage.getActivePieceCount({
+  dataSetId: 1n
+})
+
+console.log('Active pieces:', count)
+```
+
+### `terminateDataSet()`
+
+Terminate a data set and remove all pieces.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="dataSetId" type="bigint" required>
+      Data set ID to terminate
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash
+</ResponseField>
+
+```typescript
+const txHash = await warmStorage.terminateDataSet({
+  dataSetId: 1n
+})
+```
+
+## Allowance Checks
+
+### `checkAllowanceForStorage()`
+
+Check if user has sufficient operator allowance for a storage operation.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="sizeInBytes" type="bigint" required>
+      Size of data to store
+    </ParamField>
+    
+    <ParamField path="withCDN" type="boolean" required>
+      Whether CDN is enabled
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="check" type="object">
+  Allowance check result:
+  - `sufficient` - Whether allowance is sufficient
+  - `message` - Error message if insufficient
+  - `costs` - Cost breakdown (per epoch/day/month)
+</ResponseField>
+
+```typescript
+const check = await warmStorage.checkAllowanceForStorage({
+  sizeInBytes: 1024n * 1024n * 100n, // 100 MiB
+  withCDN: true
+})
+
+if (!check.sufficient) {
+  console.error('Insufficient allowance:', check.message)
+} else {
+  console.log('Cost per month:', check.costs.perMonth)
+}
+```
+
+## See Also
+
+- [StorageManager](/api/storage-manager) - High-level storage API
+- [StorageContext](/api/storage-context) - Context-based operations
+- [FWSS Contract](https://github.com/FilOzone/filecoin-services) - Contract source

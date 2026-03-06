@@ -1,0 +1,338 @@
+---
+title: Installation
+description: Install and configure the Synapse SDK in your project
+---
+
+# Installation
+
+Learn how to install and set up the Synapse SDK for Node.js, browsers, and various frameworks.
+
+## Package Manager Installation
+
+Install the SDK using your preferred package manager:
+
+<CodeGroup>
+```bash npm
+npm install @filoz/synapse-sdk
+```
+
+```bash pnpm
+pnpm add @filoz/synapse-sdk
+```
+
+```bash yarn
+yarn add @filoz/synapse-sdk
+```
+
+```bash bun
+bun add @filoz/synapse-sdk
+```
+</CodeGroup>
+
+## Environment Support
+
+Synapse SDK is designed to work in multiple environments:
+
+<Tabs>
+  <Tab title="Node.js">
+    **Requirements:**
+    - Node.js 18 or later
+    - CommonJS or ESM modules
+    
+    **Setup:**
+    ```typescript
+    import { Synapse } from '@filoz/synapse-sdk'
+    import { calibration } from '@filoz/synapse-core/chains'
+    import { http } from 'viem'
+    import { privateKeyToAccount } from 'viem/accounts'
+    
+    const account = privateKeyToAccount('0x...')
+    const synapse = Synapse.create({
+      chain: calibration,
+      transport: http(),
+      account,
+    })
+    ```
+    
+    <Note>
+      The SDK uses web standards (ReadableStream, fetch) and works in modern Node.js without polyfills.
+    </Note>
+  </Tab>
+  
+  <Tab title="Browser">
+    **Requirements:**
+    - Modern browser with ES2020 support
+    - Bundler (Vite, webpack, etc.) or native ESM
+    
+    **CDN Installation (Quick Start):**
+    ```html
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Synapse SDK Demo</title>
+    </head>
+    <body>
+      <script type="module">
+        import { Synapse } from 'https://cdn.jsdelivr.net/npm/@filoz/synapse-sdk/+esm'
+        // Your code here
+      </script>
+    </body>
+    </html>
+    ```
+    
+    **Bundler Installation:**
+    ```typescript
+    import { Synapse } from '@filoz/synapse-sdk'
+    import { createWalletClient, custom } from 'viem'
+    import { calibration } from '@filoz/synapse-core/chains'
+    
+    // Use browser wallet (MetaMask, etc.)
+    const client = createWalletClient({
+      chain: calibration,
+      transport: custom(window.ethereum),
+    })
+    
+    const [account] = await client.getAddresses()
+    const synapse = Synapse.create({
+      chain: calibration,
+      transport: custom(window.ethereum),
+      account,
+    })
+    ```
+    
+    <Warning>
+      Never expose private keys in browser code. Use wallet providers like MetaMask or WalletConnect.
+    </Warning>
+  </Tab>
+  
+  <Tab title="React">
+    **Installation:**
+    ```bash
+    npm install @filoz/synapse-sdk @filoz/synapse-react
+    ```
+    
+    **Setup with React hooks:**
+    ```typescript
+    import { SynapseProvider, useSynapse } from '@filoz/synapse-react'
+    import { calibration } from '@filoz/synapse-core/chains'
+    
+    function App() {
+      return (
+        <SynapseProvider chain={calibration}>
+          <YourComponent />
+        </SynapseProvider>
+      )
+    }
+    
+    function YourComponent() {
+      const { synapse, isConnected } = useSynapse()
+      
+      const handleUpload = async () => {
+        const data = new TextEncoder().encode('Hello')
+        const result = await synapse.storage.upload(data)
+        console.log('Uploaded:', result.pieceCid)
+      }
+      
+      return (
+        <button onClick={handleUpload} disabled={!isConnected}>
+          Upload Data
+        </button>
+      )
+    }
+    ```
+    
+    <Info>
+      The `@filoz/synapse-react` package provides React hooks and context for easier integration.
+    </Info>
+  </Tab>
+</Tabs>
+
+## TypeScript Configuration
+
+For the best development experience with TypeScript:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM"],
+    "moduleResolution": "bundler", // or "node16" for Node.js
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  }
+}
+```
+
+## Advanced Package Installation
+
+### Core Library Only
+
+If you only need low-level protocol access without the high-level SDK:
+
+```bash
+npm install @filoz/synapse-core
+```
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import * as Pay from '@filoz/synapse-core/pay'
+import { createPublicClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const client = createPublicClient({
+  chain: calibration,
+  transport: http(),
+})
+
+// Direct contract interactions
+const providers = await WarmStorage.getApprovedProviders(client, {
+  offset: 0n,
+  limit: 10n,
+})
+```
+
+### React Package
+
+For React applications with hooks and providers:
+
+```bash
+npm install @filoz/synapse-react
+```
+
+See the [React Integration example](/examples/browser-integration) for complete setup.
+
+## Verify Installation
+
+Test that everything is working:
+
+```typescript verify.ts
+import { Synapse } from '@filoz/synapse-sdk'
+import { calibration } from '@filoz/synapse-core/chains'
+
+console.log('Synapse SDK version:', Synapse.version)
+console.log('Calibration chain ID:', calibration.id)
+console.log('✅ Installation successful!')
+```
+
+Run it:
+```bash
+node verify.ts
+```
+
+Expected output:
+```text
+Synapse SDK version: 1.x.x
+Calibration chain ID: 314159
+✅ Installation successful!
+```
+
+## Environment Variables
+
+For production applications, use environment variables for configuration:
+
+```bash .env
+# Required
+PRIVATE_KEY=0x...
+
+# Optional - defaults to calibration testnet
+NETWORK=mainnet  # or 'calibration'
+RPC_URL=https://api.node.glif.io/rpc/v1
+```
+
+Load in your app:
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { mainnet, calibration } from '@filoz/synapse-core/chains'
+import { http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import dotenv from 'dotenv'
+
+dotenv.config()
+
+const chain = process.env.NETWORK === 'mainnet' ? mainnet : calibration
+const rpcUrl = process.env.RPC_URL || chain.rpcUrls.default.http[0]
+
+const synapse = Synapse.create({
+  chain,
+  transport: http(rpcUrl),
+  account: privateKeyToAccount(process.env.PRIVATE_KEY as `0x${string}`),
+})
+```
+
+<Warning>
+  Never commit `.env` files containing private keys. Add `.env` to your `.gitignore`.
+</Warning>
+
+## Dependencies
+
+The SDK has minimal peer dependencies:
+
+- **viem** - Ethereum/Filecoin client library (required)
+- **typescript** - For type checking (optional but recommended)
+
+All other dependencies are bundled with the SDK.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Module not found errors">
+    Ensure your `package.json` has the correct module resolution:
+    ```json
+    {
+      "type": "module"
+    }
+    ```
+    
+    Or use `.mjs` file extensions for ES modules.
+  </Accordion>
+  
+  <Accordion title="TypeScript errors">
+    Make sure your TypeScript version is 5.0 or later:
+    ```bash
+    npm install -D typescript@latest
+    ```
+    
+    And that your `tsconfig.json` has compatible settings (see above).
+  </Accordion>
+  
+  <Accordion title="Buffer is not defined (browser)">
+    The SDK doesn't use Node.js-specific APIs. If you see this error, a dependency might be pulling in Node.js code. Use a bundler with proper polyfills or check your build configuration.
+  </Accordion>
+  
+  <Accordion title="Network request failed">
+    Check your RPC endpoint:
+    ```typescript
+    const synapse = Synapse.create({
+      chain: calibration,
+      transport: http('https://api.calibration.node.glif.io/rpc/v1'),
+      account,
+    })
+    ```
+    
+    Verify the endpoint is accessible:
+    ```bash
+    curl https://api.calibration.node.glif.io/rpc/v1
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Complete your first upload in 5 minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand how the SDK works
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/upload-download">
+    Browse complete code examples
+  </Card>
+  <Card title="API Reference" icon="terminal" href="/api/synapse-class">
+    Explore the full API surface
+  </Card>
+</CardGroup>

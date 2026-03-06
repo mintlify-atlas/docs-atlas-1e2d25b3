@@ -1,0 +1,281 @@
+---
+title: 'SP Client'
+description: 'Low-level service provider HTTP API client'
+---
+
+## Overview
+
+The `@filoz/synapse-core/sp` module provides direct access to Curio's PDP HTTP API endpoints. This is a low-level module used internally by the SDK.
+
+<Warning>
+**Low-Level API**
+
+Most developers should use `StorageContext` or `StorageManager` instead. This module is for advanced use cases requiring direct SP API access.
+</Warning>
+
+## Core Operations
+
+The SP client implements the store → pull → commit flow:
+
+### `uploadPieceStreaming()`
+
+Upload piece data to a storage provider.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+
+const result = await SP.uploadPieceStreaming({
+  serviceURL: 'https://pdp.provider.com',
+  data: new Uint8Array([1, 2, 3, 4]),
+  pieceCid: optionalPreCalculatedCid,
+  signal: abortSignal,
+  onProgress: (bytes) => console.log(`Uploaded ${bytes} bytes`)
+})
+
+console.log('PieceCID:', result.pieceCid)
+console.log('Size:', result.size)
+```
+
+### `waitForPullStatus()`
+
+Request SP-to-SP piece transfer and wait for completion.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+
+const pullResult = await SP.waitForPullStatus(client, {
+  serviceURL: 'https://pdp.secondary.com',
+  pieces: [{
+    pieceCid,
+    sourceUrl: 'https://pdp.primary.com/piece/baga...'
+  }],
+  dataSetId: 123n,
+  clientDataSetId: 456n,
+  signal: abortSignal,
+  onStatus: (response) => {
+    response.pieces.forEach(p => {
+      console.log(`Piece ${p.pieceCid}: ${p.status}`)
+    })
+  }
+})
+
+console.log('Pull status:', pullResult.status)
+```
+
+### `createDataSetAndAddPieces()`
+
+Create a data set and add pieces in one operation.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+import { signCreateDataSetAndAddPieces } from '@filoz/synapse-core/typed-data'
+
+const extraData = await signCreateDataSetAndAddPieces(client, {
+  clientDataSetId: 789n,
+  payee: providerAddress,
+  payer: clientAddress,
+  metadata: [],
+  pieces: [{ pieceCid, metadata: [] }]
+})
+
+const result = await SP.createDataSetAndAddPieces(client, {
+  cdn: true,
+  payee: providerAddress,
+  payer: clientAddress,
+  recordKeeper: fwssAddress,
+  pieces: [{ pieceCid }],
+  metadata: {},
+  serviceURL: 'https://pdp.provider.com',
+  extraData
+})
+
+console.log('Tx hash:', result.txHash)
+
+// Wait for confirmation
+const confirmation = await SP.waitForCreateDataSetAddPieces(result)
+console.log('Dataset ID:', confirmation.dataSetId)
+console.log('Piece IDs:', confirmation.piecesIds)
+```
+
+### `addPieces()`
+
+Add pieces to an existing data set.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+import { signAddPieces } from '@filoz/synapse-core/typed-data'
+
+const extraData = await signAddPieces(client, {
+  clientDataSetId: 456n,
+  pieces: [{ pieceCid, metadata: [] }]
+})
+
+const result = await SP.addPieces(client, {
+  dataSetId: 123n,
+  clientDataSetId: 456n,
+  pieces: [{ pieceCid }],
+  serviceURL: 'https://pdp.provider.com',
+  extraData
+})
+
+// Wait for confirmation
+const confirmation = await SP.waitForAddPieces(result)
+console.log('Confirmed piece IDs:', confirmation.confirmedPieceIds)
+```
+
+## Data Set Operations
+
+### `getDataSet()`
+
+Get data set information from provider.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+
+const dataSet = await SP.getDataSet({
+  serviceURL: 'https://pdp.provider.com',
+  dataSetId: 123n
+})
+
+console.log('Dataset ID:', dataSet.id)
+console.log('Pieces:', dataSet.pieces.length)
+console.log('Next challenge epoch:', dataSet.nextChallengeEpoch)
+```
+
+### `findPiece()`
+
+Check if a piece exists on a provider.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+import * as Piece from '@filoz/synapse-core/piece'
+
+const pieceCid = Piece.asPieceCID('baga6ea4seaq...')
+
+try {
+  await SP.findPiece({
+    serviceURL: 'https://pdp.provider.com',
+    pieceCid,
+    retry: true
+  })
+  console.log('Piece found')
+} catch (error) {
+  console.error('Piece not found')
+}
+```
+
+### `schedulePieceDeletion()`
+
+Schedule a piece for removal.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+
+const result = await SP.schedulePieceDeletion(client, {
+  serviceURL: 'https://pdp.provider.com',
+  dataSetId: 123n,
+  pieceId: 456n,
+  clientDataSetId: 789n
+})
+
+console.log('Deletion scheduled:', result.hash)
+```
+
+## Health Check
+
+### `ping()`
+
+Check provider availability.
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+
+try {
+  await SP.ping('https://pdp.provider.com')
+  console.log('Provider is healthy')
+} catch (error) {
+  console.error('Provider unreachable')
+}
+```
+
+## PullStatus Type
+
+Pull operations report status for each piece:
+
+```typescript
+type PullStatus = 
+  | 'pending'      // Transfer not started
+  | 'pulling'      // Transfer in progress  
+  | 'complete'     // Transfer successful
+  | 'failed'       // Transfer failed
+```
+
+## Complete Example
+
+```typescript
+import * as SP from '@filoz/synapse-core/sp'
+import * as Piece from '@filoz/synapse-core/piece'
+import { signCreateDataSetAndAddPieces } from '@filoz/synapse-core/typed-data'
+import { createWalletClient, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const account = privateKeyToAccount('0x...')
+const client = createWalletClient({
+  account,
+  chain: calibration,
+  transport: http()
+})
+
+const providerURL = 'https://pdp.provider.com'
+const data = new Uint8Array([1, 2, 3, 4])
+
+// 1. Upload to provider
+const uploadResult = await SP.uploadPieceStreaming({
+  serviceURL: providerURL,
+  data,
+  onProgress: (bytes) => console.log(`Progress: ${bytes} bytes`)
+})
+
+console.log('Uploaded:', uploadResult.pieceCid.toString())
+
+// 2. Wait for indexing
+await SP.findPiece({
+  serviceURL: providerURL,
+  pieceCid: uploadResult.pieceCid,
+  retry: true
+})
+
+// 3. Sign and commit on-chain
+const extraData = await signCreateDataSetAndAddPieces(client, {
+  clientDataSetId: 1n,
+  payee: '0x...', // Provider address
+  payer: account.address,
+  metadata: [],
+  pieces: [{ pieceCid: uploadResult.pieceCid, metadata: [] }]
+})
+
+const commitResult = await SP.createDataSetAndAddPieces(client, {
+  cdn: false,
+  payee: '0x...',
+  payer: account.address,
+  recordKeeper: calibration.contracts.fwss.address,
+  pieces: [{ pieceCid: uploadResult.pieceCid }],
+  metadata: {},
+  serviceURL: providerURL,
+  extraData
+})
+
+// 4. Wait for confirmation
+const confirmation = await SP.waitForCreateDataSetAddPieces(commitResult)
+
+console.log('Success!')
+console.log('Dataset ID:', confirmation.dataSetId)
+console.log('Piece ID:', confirmation.piecesIds[0])
+```
+
+## See Also
+
+- [StorageContext](/api/storage-context) - High-level context API
+- [Curio PDP Spec](https://github.com/FilOzone/pdp) - API specification
+- [Typed Data](/api/core/typed-data) - EIP-712 signing

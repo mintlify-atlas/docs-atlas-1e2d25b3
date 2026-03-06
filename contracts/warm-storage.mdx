@@ -1,0 +1,437 @@
+---
+title: Warm Storage Contract
+description: FilecoinWarmStorageService (FWSS) contract reference
+---
+
+## Overview
+
+The FilecoinWarmStorageService (FWSS) contract combines PDP verification with integrated payment rails for data set management. It handles:
+
+- Client authorization via EIP-712 signatures
+- Provider whitelist management (approved/endorsed)
+- Payment rail creation and management
+- Data set and piece lifecycle
+- Proof validation callbacks
+
+## Contract Split
+
+FWSS is split into two contracts:
+
+- **Main Contract**: Write operations (state changes)
+- **StateView Contract**: Read operations (gas-efficient queries)
+
+```typescript
+import { calibration } from '@filoz/synapse-core/chains'
+
+console.log('Main:', calibration.contracts.fwss.address)
+console.log('View:', calibration.contracts.fwssStateView.address)
+```
+
+## Data Structures
+
+### Data Set
+
+```solidity
+struct DataSet {
+    uint256 id;
+    address client;
+    address payer;
+    uint256 providerId;
+    address provider;
+    uint256 railId;
+    uint256 startEpoch;
+    uint256 terminatedAtEpoch;
+    MetadataEntry[] metadata;
+}
+```
+
+### Piece
+
+```solidity
+struct Piece {
+    uint256 id;
+    uint256 dataSetId;
+    bytes32 pieceCid;
+    uint256 size;
+    uint256 scheduledRemovalEpoch;
+    MetadataEntry[] metadata;
+}
+```
+
+### Service Price
+
+```solidity
+struct ServicePrice {
+    uint256 pricePerTiBPerMonthNoCDN;
+    uint256 pricePerTiBCdnEgress;
+    uint256 pricePerTiBCacheMissEgress;
+    address tokenAddress;
+    uint256 epochsPerMonth;
+    uint256 minimumPricePerMonth;
+}
+```
+
+## Read Operations
+
+### Get Service Price
+
+```typescript
+import * as WarmStorage from '@filoz/synapse-core/warm-storage'
+import { createPublicClient, http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const client = createPublicClient({
+  chain: calibration,
+  transport: http(),
+})
+
+const price = await WarmStorage.getServicePrice(client)
+
+console.log('Price per TiB/month:', price.pricePerTiBPerMonthNoCDN)
+console.log('CDN egress:', price.pricePerTiBCdnEgress)
+console.log('Cache miss egress:', price.pricePerTiBCacheMissEgress)
+console.log('Token:', price.tokenAddress)
+console.log('Epochs/month:', price.epochsPerMonth)
+```
+
+### Get Approved Providers
+
+```typescript
+const providerIds = await WarmStorage.getApprovedProviders(client, {
+  offset: 0n,
+  limit: 100n,
+})
+
+console.log(`${providerIds.length} approved providers`)
+```
+
+### Get Endorsed Providers
+
+```typescript
+const endorsedIds = await WarmStorage.getEndorsedProviders(client)
+
+console.log(`${endorsedIds.length} endorsed providers`)
+```
+
+### Get Data Set
+
+```typescript
+const dataSet = await WarmStorage.getDataSet(client, { 
+  dataSetId: 123n 
+})
+
+if (dataSet) {
+  console.log('Client:', dataSet.client)
+  console.log('Provider:', dataSet.serviceProvider)
+  console.log('Rail ID:', dataSet.railId)
+  console.log('Start:', dataSet.startEpoch)
+  console.log('Terminated:', dataSet.terminatedAtEpoch)
+  console.log('Metadata:', dataSet.metadata)
+}
+```
+
+### Get Client Data Sets
+
+```typescript
+const dataSets = await WarmStorage.getClientDataSetsWithDetails(client, {
+  address: account.address,
+})
+
+for (const ds of dataSets) {
+  console.log(`Data Set ${ds.id}:`)
+  console.log(`  Provider: ${ds.serviceProvider}`)
+  console.log(`  Active: ${ds.terminatedAtEpoch === 0n}`)
+  console.log(`  Managed by service: ${ds.isManagedByService}`)
+}
+```
+
+### Get Piece
+
+```typescript
+const piece = await WarmStorage.getPiece(client, { 
+  pieceId: 456n 
+})
+
+if (piece) {
+  console.log('PieceCID:', piece.pieceCid)
+  console.log('Data Set:', piece.dataSetId)
+  console.log('Size:', piece.size)
+  console.log('Scheduled removal:', piece.scheduledRemovalEpoch)
+}
+```
+
+## Write Operations
+
+<Note>
+  Most write operations are called by storage providers (Curio) via PDPVerifier callbacks,
+  not directly by clients. Use the Synapse SDK for client operations.
+</Note>
+
+### Terminate Data Set
+
+```typescript
+import { createWalletClient } from 'viem'
+
+const walletClient = createWalletClient({
+  chain: calibration,
+  transport: http(),
+  account,
+})
+
+const hash = await WarmStorage.terminateDataSet(walletClient, {
+  dataSetId: 123n,
+})
+
+const receipt = await walletClient.waitForTransactionReceipt({ hash })
+console.log('Data set terminated')
+```
+
+### Add Approved Provider (Owner Only)
+
+```typescript
+const hash = await WarmStorage.addApprovedProvider(walletClient, {
+  providerId: 5n,
+})
+```
+
+### Remove Approved Provider (Owner Only)
+
+```typescript
+const hash = await WarmStorage.removeApprovedProvider(walletClient, {
+  providerId: 5n,
+})
+```
+
+### Endorse Provider (Owner Only)
+
+```typescript
+const hash = await WarmStorage.endorseProvider(walletClient, {
+  providerId: 1n,
+})
+```
+
+## Events
+
+### DataSetCreated
+
+```solidity
+event DataSetCreated(
+    uint256 indexed dataSetId,
+    address indexed client,
+    address indexed payer,
+    uint256 providerId,
+    uint256 railId
+);
+```
+
+### PiecesAdded
+
+```solidity
+event PiecesAdded(
+    uint256 indexed dataSetId,
+    uint256[] pieceIds,
+    bytes32[] pieceCids
+);
+```
+
+### DataSetTerminated
+
+```solidity
+event DataSetTerminated(
+    uint256 indexed dataSetId,
+    uint256 terminationEpoch
+);
+```
+
+### Listen for Events
+
+```typescript
+import { watchContractEvent } from 'viem/actions'
+
+const unwatch = watchContractEvent(client, {
+  address: calibration.contracts.fwss.address,
+  abi: calibration.contracts.fwss.abi,
+  eventName: 'DataSetCreated',
+  args: {
+    client: account.address,
+  },
+  onLogs: (logs) => {
+    for (const log of logs) {
+      console.log('New data set:', log.args.dataSetId)
+      console.log('Rail ID:', log.args.railId)
+    }
+  },
+})
+```
+
+## Metadata
+
+### Data Set Metadata
+
+```typescript
+import { combineMetadata } from '@filoz/synapse-sdk'
+
+// Combine user metadata with system metadata
+const metadata = combineMetadata(
+  { category: 'documents', project: 'acme' },
+  true // withCDN
+)
+
+// Results in:
+// [
+//   { key: 'category', value: 'documents' },
+//   { key: 'project', value: 'acme' },
+//   { key: 'withCDN', value: '' },
+// ]
+```
+
+**Limits:**
+- Max 10 entries per data set
+- Max 5 entries per piece
+- Keys: max 32 characters
+- Values: max 128 characters
+
+### withCDN Metadata
+
+The `withCDN` key is special:
+
+```typescript
+// Check if data set has CDN enabled
+const dataSet = await WarmStorage.getDataSet(client, { dataSetId: 123n })
+
+const hasCDN = dataSet.metadata.some(m => m.key === 'withCDN')
+console.log('CDN enabled:', hasCDN)
+```
+
+## Provider Management
+
+### Check Provider Status
+
+```typescript
+const isApproved = await WarmStorage.isApprovedProvider(client, {
+  providerId: 1n,
+})
+
+const isEndorsed = await WarmStorage.isEndorsedProvider(client, {
+  providerId: 1n,
+})
+
+console.log('Approved:', isApproved)
+console.log('Endorsed:', isEndorsed)
+```
+
+### Get Provider Counts
+
+```typescript
+const approvedCount = await WarmStorage.getApprovedProviderCount(client)
+const endorsedCount = await WarmStorage.getEndorsedProviderCount(client)
+
+console.log(`${approvedCount} approved, ${endorsedCount} endorsed`)
+```
+
+## Cost Estimation
+
+```typescript
+import { SIZE_CONSTANTS, TIME_CONSTANTS } from '@filoz/synapse-sdk'
+
+const price = await WarmStorage.getServicePrice(client)
+
+// Calculate monthly cost for 1 TiB
+const sizeInTiB = 1
+const monthlyCost = price.pricePerTiBPerMonthNoCDN * BigInt(sizeInTiB)
+
+console.log(`1 TiB/month: ${monthlyCost} (base units)`)
+
+// Calculate per-epoch cost
+const perEpochCost = monthlyCost / price.epochsPerMonth
+console.log(`Per epoch: ${perEpochCost} (base units)`)
+
+// Calculate per-day cost
+const perDayCost = monthlyCost / TIME_CONSTANTS.DAYS_PER_MONTH
+console.log(`Per day: ${perDayCost} (base units)`)
+```
+
+## Integration with Payments
+
+### Data Set → Rail Mapping
+
+Each data set has an associated payment rail:
+
+```typescript
+import * as Pay from '@filoz/synapse-core/pay'
+
+const dataSet = await WarmStorage.getDataSet(client, { dataSetId: 123n })
+const rail = await Pay.getRail(client, { railId: dataSet.railId })
+
+console.log('Rail details:')
+console.log('  Client:', rail.client)
+console.log('  Payee:', rail.payee)
+console.log('  Rate:', rail.rate)
+console.log('  Last settled:', rail.lastSettledEpoch)
+```
+
+### Terminate → Rail Termination
+
+Terminating a data set also terminates the payment rail:
+
+```typescript
+const hash = await WarmStorage.terminateDataSet(walletClient, {
+  dataSetId: 123n,
+})
+
+// After termination, rail.endEpoch will be set
+const dataSet = await WarmStorage.getDataSet(client, { dataSetId: 123n })
+console.log('Terminated at epoch:', dataSet.terminatedAtEpoch)
+
+const rail = await Pay.getRail(client, { railId: dataSet.railId })
+console.log('Rail ended at epoch:', rail.endEpoch)
+```
+
+## Nonce Management
+
+```typescript
+import { getNonce } from '@filoz/synapse-core/warm-storage'
+
+// Get current nonce for signing
+const nonce = await getNonce(client, {
+  address: account.address,
+})
+
+console.log('Current nonce:', nonce)
+```
+
+Nonce increments after each signed operation (CreateDataSet, AddPieces, etc.).
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use SDK" icon="box">
+    Use Synapse SDK instead of direct contract calls
+  </Card>
+  <Card title="Check Provider Status" icon="circle-check">
+    Verify providers are approved before use
+  </Card>
+  <Card title="Monitor Metadata" icon="tags">
+    Use metadata for filtering and organization
+  </Card>
+  <Card title="Track Rail Status" icon="train-track">
+    Monitor associated payment rails
+  </Card>
+</CardGroup>
+
+## Source Code
+
+<Card title="FWSS Contract" href="https://github.com/FilOzone/filecoin-services" icon="github">
+  View the FilecoinWarmStorageService contract source
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="PDP Verifier" href="/contracts/pdp-verifier" icon="shield-check">
+    Learn about proof verification
+  </Card>
+  <Card title="Filecoin Pay" href="/contracts/filecoin-pay" icon="money-bill-wave">
+    Understand payment rails
+  </Card>
+</CardGroup>

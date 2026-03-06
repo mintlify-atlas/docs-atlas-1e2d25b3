@@ -1,122 +1,136 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Synapse SDK",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#0995f8",
+    "light": "#c8e7f9",
+    "dark": "#5cb8fc"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "/favicon.png",
+  "logo": {
+    "light": "https://media.brand.dev/80db77d8-89f6-4e54-a88c-2a09fa7bb1ae.svg",
+    "dark": "https://media.brand.dev/80db77d8-89f6-4e54-a88c-2a09fa7bb1ae.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/FilOzone/synapse-sdk"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/FilOzone/synapse-sdk"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/storage-pipeline",
+              "concepts/multi-copy-upload",
+              "concepts/provider-selection",
+              "concepts/session-keys"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/storage-operations",
+              "guides/payment-management",
+              "guides/provider-registry",
+              "guides/filbeam-cdn",
+              "guides/session-keys"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Examples",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "examples/upload-download",
+              "examples/multi-copy-storage",
+              "examples/split-operations",
+              "examples/browser-integration"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Synapse SDK",
             "pages": [
-              "api-reference/introduction"
+              "api/synapse-class",
+              "api/storage-manager",
+              "api/storage-context",
+              "api/payments-service",
+              "api/warm-storage-service",
+              "api/sp-registry-service",
+              "api/filbeam-service"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Synapse Core",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/core/chains",
+              "api/core/sp-client",
+              "api/core/typed-data",
+              "api/core/session-key",
+              "api/core/piece-cid",
+              "api/core/contract-actions"
+            ]
+          },
+          {
+            "group": "React Hooks",
+            "pages": [
+              "api/react/overview",
+              "api/react/hooks"
+            ]
+          },
+          {
+            "group": "Types & Errors",
+            "pages": [
+              "api/types",
+              "api/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Smart Contracts",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "contracts/overview",
+              "contracts/architecture"
+            ]
+          },
+          {
+            "group": "Contracts",
+            "pages": [
+              "contracts/warm-storage",
+              "contracts/pdp-verifier",
+              "contracts/filecoin-pay",
+              "contracts/sp-registry",
+              "contracts/session-key-registry"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

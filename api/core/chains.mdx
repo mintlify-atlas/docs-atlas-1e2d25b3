@@ -1,0 +1,210 @@
+---
+title: 'Chains'
+description: 'Filecoin chain configurations and contract addresses'
+---
+
+## Overview
+
+The `@filoz/synapse-core/chains` module provides chain configurations for Filecoin networks with all contract addresses and ABIs.
+
+## Supported Chains
+
+### `mainnet`
+
+Filecoin Mainnet (Chain ID: 314)
+
+```typescript
+import { mainnet } from '@filoz/synapse-core/chains'
+
+console.log(mainnet.id) // 314
+console.log(mainnet.name) // "Filecoin - Mainnet"
+console.log(mainnet.rpcUrls.default.http[0]) // "https://api.node.glif.io/rpc/v1"
+```
+
+### `calibration`
+
+Filecoin Calibration Testnet (Chain ID: 314159)
+
+```typescript
+import { calibration } from '@filoz/synapse-core/chains'
+
+console.log(calibration.id) // 314159
+console.log(calibration.name) // "Filecoin - Calibration testnet"
+console.log(calibration.testnet) // true
+```
+
+### `devnet`
+
+Local Development Network (Chain ID: 31415926)
+
+```typescript
+import { devnet } from '@filoz/synapse-core/chains'
+
+console.log(devnet.id) // 31415926
+console.log(devnet.rpcUrls.default.http[0]) // "http://127.0.0.1:5700/rpc/v1"
+```
+
+## Chain Interface
+
+### Properties
+
+<ParamField path="id" type="number">
+  Chain ID
+</ParamField>
+
+<ParamField path="name" type="string">
+  Human-readable chain name
+</ParamField>
+
+<ParamField path="nativeCurrency" type="object">
+  Native currency information (FIL or tFIL)
+</ParamField>
+
+<ParamField path="genesisTimestamp" type="number">
+  Genesis timestamp in seconds (Unix timestamp) for epoch to date conversions
+</ParamField>
+
+<ParamField path="contracts" type="object">
+  All FOC contract addresses and ABIs
+</ParamField>
+
+<ParamField path="filbeam" type="object | null">
+  FilBeam CDN configuration (null for devnet)
+</ParamField>
+
+## Contract Addresses
+
+Every chain includes contract configurations:
+
+```typescript
+import { calibration } from '@filoz/synapse-core/chains'
+
+// Core contracts
+console.log(calibration.contracts.filecoinPay.address) // FilecoinPay
+console.log(calibration.contracts.fwss.address) // FWSS (write ops)
+console.log(calibration.contracts.fwssView.address) // FWSS (read ops)
+console.log(calibration.contracts.pdp.address) // PDPVerifier
+
+// Registry and session keys
+console.log(calibration.contracts.serviceProviderRegistry.address)
+console.log(calibration.contracts.sessionKeyRegistry.address)
+console.log(calibration.contracts.endorsements.address)
+
+// Token
+console.log(calibration.contracts.usdfc.address) // USDFC token
+
+// Each contract also includes its ABI
+console.log(calibration.contracts.filecoinPay.abi)
+```
+
+## Utility Functions
+
+### `getChain()`
+
+Get a chain by ID.
+
+<ParamField path="id" type="number">
+  Chain ID (defaults to mainnet if omitted)
+</ParamField>
+
+<ResponseField name="chain" type="Chain">
+  Chain configuration
+</ResponseField>
+
+```typescript
+import { getChain } from '@filoz/synapse-core/chains'
+
+const mainnet = getChain(314)
+const calibration = getChain(314159)
+const devnet = getChain(31415926)
+
+// Default to mainnet
+const chain = getChain() // mainnet
+```
+
+### `asChain()`
+
+Convert a Viem chain to a Filecoin chain with validation.
+
+<ParamField path="chain" type="ViemChain" required>
+  Viem chain object
+</ParamField>
+
+<ResponseField name="chain" type="Chain">
+  Validated Filecoin chain
+</ResponseField>
+
+```typescript
+import { asChain } from '@filoz/synapse-core/chains'
+import { createClient, http } from 'viem'
+
+const client = createClient({ chain: calibration, transport: http() })
+
+// Validate and get typed chain
+const chain = asChain(client.chain)
+console.log(chain.contracts.fwss.address)
+```
+
+## Complete Example
+
+```typescript
+import { calibration, mainnet, asChain } from '@filoz/synapse-core/chains'
+import { createPublicClient, http } from 'viem'
+
+// Create client with chain
+const client = createPublicClient({
+  chain: calibration,
+  transport: http()
+})
+
+// Get validated chain
+const chain = asChain(client.chain)
+
+console.log('Chain:', chain.name)
+console.log('Chain ID:', chain.id)
+console.log('Testnet:', chain.testnet)
+
+// Access contracts
+console.log('\nContract Addresses:')
+console.log('FilecoinPay:', chain.contracts.filecoinPay.address)
+console.log('FWSS:', chain.contracts.fwss.address)
+console.log('PDPVerifier:', chain.contracts.pdp.address)
+console.log('USDFC Token:', chain.contracts.usdfc.address)
+
+// FilBeam configuration
+if (chain.filbeam) {
+  console.log('\nFilBeam domain:', chain.filbeam.retrievalDomain)
+}
+
+// Genesis timestamp for epoch calculations
+console.log('\nGenesis:', new Date(chain.genesisTimestamp * 1000).toISOString())
+```
+
+## Chain Selection
+
+```typescript
+import { mainnet, calibration } from '@filoz/synapse-core/chains'
+import { Synapse } from '@filoz/synapse-sdk'
+
+// Production
+const synapseMainnet = Synapse.create({
+  account,
+  chain: mainnet
+})
+
+// Testing
+const synapseCalibration = Synapse.create({
+  account,
+  chain: calibration  
+})
+
+// Environment-based selection
+const chain = process.env.NODE_ENV === 'production' ? mainnet : calibration
+const synapse = Synapse.create({ account, chain })
+```
+
+## See Also
+
+- [Viem Chains](https://viem.sh/docs/chains/introduction) - Chain configuration format
+- [Contract ABIs](/api/core/contract-actions) - Using contract functions
+- [Synapse](/api/synapse-class) - SDK initialization

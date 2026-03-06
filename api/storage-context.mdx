@@ -1,0 +1,537 @@
+---
+title: 'StorageContext'
+description: 'Manage storage operations for a specific provider and data set'
+---
+
+## Overview
+
+A `StorageContext` represents a connection to a specific service provider and data set. It provides fine-grained control over the storage workflow with split operations: `store()`, `pull()`, and `commit()`.
+
+Contexts are created via `StorageManager.createContext()` or `createContexts()`.
+
+## Properties
+
+### `provider`
+
+The service provider information.
+
+```typescript
+const context = await synapse.storage.createContext()
+console.log(context.provider.id)
+console.log(context.provider.pdp.serviceURL)
+```
+
+### `dataSetId`
+
+The data set ID if one exists, otherwise `undefined`.
+
+```typescript
+if (context.dataSetId) {
+  console.log('Using existing dataset:', context.dataSetId)
+} else {
+  console.log('Will create new dataset on commit')
+}
+```
+
+### `dataSetMetadata`
+
+Metadata associated with this context's data set.
+
+```typescript
+console.log(context.dataSetMetadata)
+// { category: 'videos', cdn: '' }
+```
+
+### `withCDN`
+
+Whether CDN services are enabled for this context.
+
+```typescript
+if (context.withCDN) {
+  console.log('CDN enabled')
+}
+```
+
+## Split Operations Flow
+
+The context provides three core operations that can be used independently:
+
+```
+store() → pull() → commit()
+  │        │         │
+  │        │         └── On-chain registration
+  │        └────────── SP-to-SP transfer
+  └─────────────────── Upload to provider
+```
+
+### `store()`
+
+Upload data to the provider without on-chain commitment.
+
+<ParamField path="data" type="Uint8Array | ReadableStream<Uint8Array>" required>
+  Raw bytes or readable stream to upload
+</ParamField>
+
+<ParamField path="options" type="StoreOptions">
+  Store options
+  
+  <Expandable title="properties">
+    <ParamField path="pieceCid" type="PieceCID">
+      Pre-calculated PieceCID to skip CommP calculation
+    </ParamField>
+    
+    <ParamField path="signal" type="AbortSignal">
+      Abort signal to cancel the store
+    </ParamField>
+    
+    <ParamField path="onProgress" type="(bytesUploaded: number) => void">
+      Progress callback
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="StoreResult">
+  Store result containing:
+  - `pieceCid` - Content identifier
+  - `size` - Data size in bytes
+</ResponseField>
+
+```typescript
+const context = await synapse.storage.createContext()
+
+// Store data on provider (not yet on-chain)
+const { pieceCid, size } = await context.store(data, {
+  onProgress: (bytes) => console.log(`Uploaded ${bytes} bytes`)
+})
+
+console.log('Stored:', pieceCid.toString())
+```
+
+### `presignForCommit()`
+
+Pre-sign EIP-712 extraData for pieces to avoid redundant wallet prompts.
+
+<ParamField path="pieces" type="Array<{ pieceCid, pieceMetadata? }>" required>
+  Pieces to sign for with optional metadata
+</ParamField>
+
+<ResponseField name="extraData" type="Hex">
+  Signed extraData to pass to `pull()` or `commit()`
+</ResponseField>
+
+```typescript
+const extraData = await context.presignForCommit([
+  { pieceCid, pieceMetadata: { tag: 'important' } }
+])
+
+// Use extraData in pull and commit to avoid re-signing
+await context.pull({ pieces: [pieceCid], from: sourceUrl, extraData })
+await context.commit({ pieces: [{ pieceCid }], extraData })
+```
+
+### `pull()`
+
+Request this provider to pull pieces from another provider via SP-to-SP transfer.
+
+<ParamField path="options" type="PullOptions" required>
+  Pull options
+  
+  <Expandable title="properties">
+    <ParamField path="pieces" type="PieceCID[]" required>
+      Pieces to pull
+    </ParamField>
+    
+    <ParamField path="from" type="string | ((pieceCid: PieceCID) => string)" required>
+      Source URL or function returning piece URL
+    </ParamField>
+    
+    <ParamField path="extraData" type="Hex">
+      Pre-signed extraData from `presignForCommit()`
+    </ParamField>
+    
+    <ParamField path="signal" type="AbortSignal">
+      Abort signal
+    </ParamField>
+    
+    <ParamField path="onProgress" type="(pieceCid, status) => void">
+      Pull progress callback
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="PullResult">
+  Pull result with:
+  - `status` - Overall status ('complete' or 'failed')
+  - `pieces` - Per-piece status array
+</ResponseField>
+
+```typescript
+const primary = contexts[0]
+const secondary = contexts[1]
+
+// Store on primary
+const { pieceCid } = await primary.store(data)
+
+// Pull to secondary from primary
+const pullResult = await secondary.pull({
+  pieces: [pieceCid],
+  from: (cid) => primary.getPieceUrl(cid),
+  onProgress: (cid, status) => console.log(`Pull: ${status}`)
+})
+
+if (pullResult.status === 'complete') {
+  console.log('Pull successful')
+}
+```
+
+### `commit()`
+
+Commit pieces on-chain by calling AddPieces or CreateDataSetAndAddPieces.
+
+<ParamField path="options" type="CommitOptions" required>
+  Commit options
+  
+  <Expandable title="properties">
+    <ParamField path="pieces" type="Array<{ pieceCid, pieceMetadata? }>" required>
+      Pieces to commit with optional metadata
+    </ParamField>
+    
+    <ParamField path="extraData" type="Hex">
+      Pre-signed extraData from `presignForCommit()`
+    </ParamField>
+    
+    <ParamField path="onSubmitted" type="(txHash: Hex) => void">
+      Called when transaction is submitted
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="CommitResult">
+  Commit result with:
+  - `txHash` - Transaction hash
+  - `pieceIds` - Piece IDs assigned by contract
+  - `dataSetId` - Data set ID (may be newly created)
+  - `isNewDataSet` - Whether a new data set was created
+</ResponseField>
+
+```typescript
+// Store data first
+const { pieceCid } = await context.store(data)
+
+// Commit on-chain
+const result = await context.commit({
+  pieces: [{ pieceCid, pieceMetadata: { tag: 'doc' } }],
+  onSubmitted: (txHash) => console.log('Tx submitted:', txHash)
+})
+
+console.log('Dataset ID:', result.dataSetId)
+console.log('Piece ID:', result.pieceIds[0])
+console.log('New dataset:', result.isNewDataSet)
+```
+
+## Convenience Method
+
+### `upload()`
+
+Combines `store()` and `commit()` into a single operation.
+
+<ParamField path="data" type="Uint8Array | ReadableStream<Uint8Array>" required>
+  Data to upload
+</ParamField>
+
+<ParamField path="options" type="UploadOptions">
+  Upload options including StoreOptions and callbacks
+</ParamField>
+
+<ResponseField name="result" type="UploadResult">
+  Upload result with pieceCid, size, copies array, and failures
+</ResponseField>
+
+```typescript
+const context = await synapse.storage.createContext()
+
+const result = await context.upload(data, {
+  pieceMetadata: { category: 'images' },
+  onProgress: (bytes) => console.log(`Uploaded ${bytes} bytes`),
+  onStored: (providerId, pieceCid) => console.log('Stored'),
+  onPiecesConfirmed: (dataSetId, providerId, pieces) => 
+    console.log('Confirmed on-chain')
+})
+
+console.log('Copy:', result.copies[0])
+```
+
+## Download & Retrieval
+
+### `download()`
+
+Download data from this specific provider.
+
+<ParamField path="options" type="DownloadOptions" required>
+  <Expandable title="properties">
+    <ParamField path="pieceCid" type="string | PieceCID" required>
+      The piece CID to download
+    </ParamField>
+    
+    <ParamField path="withCDN" type="boolean">
+      Enable CDN retrieval
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="data" type="Uint8Array">
+  Downloaded and validated data
+</ResponseField>
+
+```typescript
+const data = await context.download({
+  pieceCid: 'baga6ea4seaq...'
+})
+```
+
+### `getPieceUrl()`
+
+Get the retrieval URL for a piece on this provider.
+
+<ParamField path="pieceCid" type="PieceCID" required>
+  The piece CID
+</ParamField>
+
+<ResponseField name="url" type="string">
+  Full retrieval URL for the piece
+</ResponseField>
+
+```typescript
+const url = context.getPieceUrl(pieceCid)
+console.log('Retrieve from:', url)
+```
+
+## Piece Management
+
+### `hasPiece()`
+
+Check if a piece exists on this provider.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="pieceCid" type="string | PieceCID" required>
+      The piece CID to check
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="exists" type="boolean">
+  True if the piece exists on this provider
+</ResponseField>
+
+```typescript
+const exists = await context.hasPiece({ pieceCid })
+if (exists) {
+  console.log('Piece is available')
+}
+```
+
+### `pieceStatus()`
+
+Get comprehensive status including proof timing for a piece.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="pieceCid" type="string | PieceCID" required>
+      The piece CID
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="status" type="PieceStatus">
+  Status information:
+  - `exists` - Whether piece exists on provider
+  - `pieceId` - Piece ID if in data set
+  - `dataSetLastProven` - When data set was last proven
+  - `dataSetNextProofDue` - When next proof is due
+  - `inChallengeWindow` - Whether in challenge window
+  - `isProofOverdue` - Whether proof is overdue
+  - `retrievalUrl` - Piece retrieval URL
+</ResponseField>
+
+```typescript
+const status = await context.pieceStatus({ pieceCid })
+
+console.log('Exists:', status.exists)
+if (status.dataSetLastProven) {
+  console.log('Last proven:', status.dataSetLastProven)
+}
+if (status.dataSetNextProofDue) {
+  console.log('Next proof due:', status.dataSetNextProofDue)
+}
+if (status.isProofOverdue) {
+  console.warn('Proof is overdue!')
+}
+```
+
+### `getPieces()`
+
+Get all active pieces in this data set as an async generator.
+
+<ParamField path="options" type="object">
+  <Expandable title="properties">
+    <ParamField path="batchSize" type="bigint" default="100n">
+      Batch size for pagination
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="pieces" type="AsyncGenerator<PieceRecord>">
+  Async generator yielding piece records with:
+  - `pieceCid` - Piece CID
+  - `pieceId` - Piece ID
+</ResponseField>
+
+```typescript
+for await (const piece of context.getPieces()) {
+  console.log(`Piece ${piece.pieceId}: ${piece.pieceCid}`)
+}
+
+// With custom batch size
+for await (const piece of context.getPieces({ batchSize: 50n })) {
+  // Process piece
+}
+```
+
+### `deletePiece()`
+
+Schedule a piece for removal from the data set.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="piece" type="string | PieceCID | bigint" required>
+      Piece CID or piece ID to delete
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash of the delete operation
+</ResponseField>
+
+```typescript
+// By piece CID
+const txHash = await context.deletePiece({ piece: pieceCid })
+
+// By piece ID
+const txHash = await context.deletePiece({ piece: 42n })
+```
+
+### `getScheduledRemovals()`
+
+Get all pieces scheduled for removal from this data set.
+
+<ResponseField name="pieceIds" type="bigint[]">
+  Array of piece IDs scheduled for removal
+</ResponseField>
+
+```typescript
+const scheduled = await context.getScheduledRemovals()
+console.log('Pieces to be removed:', scheduled)
+```
+
+## Data Set Operations
+
+### `getProviderInfo()`
+
+Get information about the service provider for this context.
+
+<ResponseField name="provider" type="PDPProvider">
+  Provider information including pricing and service URLs
+</ResponseField>
+
+```typescript
+const info = await context.getProviderInfo()
+console.log('Provider:', info.serviceProvider)
+console.log('PDP URL:', info.pdp.serviceURL)
+```
+
+### `preflightUpload()`
+
+Run preflight checks for an upload to this context.
+
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="size" type="number" required>
+      Size of data to upload in bytes
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="info" type="PreflightInfo">
+  Preflight information with cost estimates and allowance checks
+</ResponseField>
+
+```typescript
+const preflight = await context.preflightUpload({
+  size: 1024 * 1024 * 50 // 50 MiB
+})
+
+console.log('Estimated cost/month:', preflight.estimatedCost.perMonth)
+```
+
+### `terminate()`
+
+Terminate this data set and remove all pieces.
+
+<ResponseField name="txHash" type="Hash">
+  Transaction hash of the termination
+</ResponseField>
+
+```typescript
+const txHash = await context.terminate()
+console.log('Dataset terminated:', txHash)
+```
+
+## Advanced Multi-Copy Pattern
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = Synapse.create({ account, chain })
+
+// Create contexts for 3 providers
+const [primary, secondary1, secondary2] = 
+  await synapse.storage.createContexts({ count: 3 })
+
+// Store on primary
+const { pieceCid } = await primary.store(data)
+
+// Pre-sign for both secondaries
+const extraData1 = await secondary1.presignForCommit([{ pieceCid }])
+const extraData2 = await secondary2.presignForCommit([{ pieceCid }])
+
+// Pull to secondaries in parallel
+await Promise.all([
+  secondary1.pull({
+    pieces: [pieceCid],
+    from: (cid) => primary.getPieceUrl(cid),
+    extraData: extraData1
+  }),
+  secondary2.pull({
+    pieces: [pieceCid],
+    from: (cid) => primary.getPieceUrl(cid),
+    extraData: extraData2
+  })
+])
+
+// Commit all in parallel
+const commits = await Promise.all([
+  primary.commit({ pieces: [{ pieceCid }] }),
+  secondary1.commit({ pieces: [{ pieceCid }], extraData: extraData1 }),
+  secondary2.commit({ pieces: [{ pieceCid }], extraData: extraData2 })
+])
+
+console.log('All copies committed')
+```
+
+## See Also
+
+- [StorageManager](/api/storage-manager) - Context creation
+- [Split Operations Guide](/examples/split-operations) - Advanced workflows
+- [Multi-Copy Uploads](/concepts/multi-copy-upload) - Redundancy patterns

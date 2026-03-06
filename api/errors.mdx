@@ -1,0 +1,298 @@
+---
+title: 'Errors'
+description: 'Error types and handling in Synapse SDK'
+---
+
+## Overview
+
+The Synapse SDK provides structured error types for different failure scenarios. All errors extend a base `SynapseError` class with detailed context.
+
+## Storage Errors
+
+### `StoreError`
+
+Thrown when data fails to store on the primary provider.
+
+```typescript
+import { StoreError } from '@filoz/synapse-sdk/errors'
+
+try {
+  const result = await synapse.storage.upload(data)
+} catch (error) {
+  if (StoreError.is(error)) {
+    console.error('Store failed on provider', error.providerId)
+    console.error('Endpoint:', error.endpoint)
+    console.error('Cause:', error.cause)
+  }
+}
+```
+
+**Properties:**
+- `name: 'StoreError'`
+- `message: string` - Error description
+- `providerId?: string` - Provider ID that failed
+- `endpoint?: string` - Provider endpoint
+- `cause?: Error` - Underlying error
+
+**When thrown:**
+- Network failure during upload
+- Provider API error
+- Data validation failure
+- Timeout during upload
+
+### `CommitError`
+
+Thrown when all on-chain commit attempts fail after successful storage.
+
+```typescript
+import { CommitError } from '@filoz/synapse-sdk/errors'
+
+try {
+  const result = await synapse.storage.upload(data)
+} catch (error) {
+  if (CommitError.is(error)) {
+    console.error('Commit failed on provider', error.providerId)
+    console.error('Data is stored but not on-chain')
+    // Data can potentially be recovered by retrying commit
+  }
+}
+```
+
+**Properties:**
+- `name: 'CommitError'`
+- `message: string` - Error description  
+- `providerId?: string` - Provider ID
+- `endpoint?: string` - Provider endpoint
+- `cause?: Error` - Underlying error
+
+**When thrown:**
+- Transaction reverted on-chain
+- Insufficient gas
+- Wallet signature rejection
+- All providers failed commit
+
+<Warning>
+**Data Recovery**
+
+When `CommitError` occurs, data is stored on the provider but not committed on-chain. The piece may be garbage collected by the provider if not committed within a reasonable timeframe.
+</Warning>
+
+## Core Errors
+
+### `InvalidPieceCIDError`
+
+Thrown when a PieceCID is invalid or malformed.
+
+```typescript
+import { InvalidPieceCIDError } from '@filoz/synapse-core/errors'
+import * as Piece from '@filoz/synapse-core/piece'
+
+const input = 'invalid-cid'
+const pieceCid = Piece.asPieceCID(input)
+
+if (!pieceCid) {
+  throw new InvalidPieceCIDError(input)
+}
+```
+
+### `UnsupportedChainError`
+
+Thrown when trying to use an unsupported chain.
+
+```typescript
+import { UnsupportedChainError } from '@filoz/synapse-core/errors'
+import { asChain } from '@filoz/synapse-core/chains'
+
+try {
+  const chain = asChain(unknownChain)
+} catch (error) {
+  if (error instanceof UnsupportedChainError) {
+    console.error('Chain ID not supported:', error.chainId)
+  }
+}
+```
+
+## Error Handling Patterns
+
+### Basic Error Handling
+
+```typescript
+try {
+  const result = await synapse.storage.upload(data)
+  console.log('Success:', result.pieceCid.toString())
+} catch (error) {
+  if (error instanceof Error) {
+    console.error('Upload failed:', error.message)
+  }
+}
+```
+
+### Specific Error Types
+
+```typescript
+import { StoreError, CommitError } from '@filoz/synapse-sdk/errors'
+
+try {
+  const result = await synapse.storage.upload(data)
+} catch (error) {
+  if (StoreError.is(error)) {
+    console.error('Primary store failed')
+    console.error('Provider:', error.providerId)
+    console.error('Can retry with different provider')
+  } else if (CommitError.is(error)) {
+    console.error('Commit failed')
+    console.error('Data stored but not on-chain')
+    console.error('May need manual recovery')
+  } else {
+    console.error('Unknown error:', error)
+  }
+}
+```
+
+### Multi-Copy Failure Handling
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 3
+})
+
+if (result.copies.length < 3) {
+  console.warn(`Only ${result.copies.length} of 3 copies succeeded`)
+  
+  // Inspect failures
+  result.failures.forEach(failure => {
+    console.error(`Provider ${failure.providerId} (${failure.role}): ${failure.error}`)
+    
+    if (failure.explicit) {
+      console.error('Explicitly requested provider failed')
+    }
+  })
+  
+  // Decide if partial success is acceptable
+  if (result.copies.length === 0) {
+    throw new Error('All copies failed')
+  }
+}
+```
+
+### Context-Specific Errors
+
+```typescript
+import { InvalidPieceCIDError } from '@filoz/synapse-core/errors'
+
+const context = await synapse.storage.createContext()
+
+try {
+  const data = await context.download({ pieceCid: 'invalid' })
+} catch (error) {
+  if (error instanceof InvalidPieceCIDError) {
+    console.error('Invalid PieceCID format')
+  } else {
+    console.error('Download failed:', error)
+  }
+}
+```
+
+### Retry Logic
+
+```typescript
+import { StoreError } from '@filoz/synapse-sdk/errors'
+
+async function uploadWithRetry(data: Uint8Array, maxAttempts = 3) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await synapse.storage.upload(data)
+      return result
+    } catch (error) {
+      if (StoreError.is(error)) {
+        console.warn(`Attempt ${attempt} failed, retrying...`)
+        
+        if (attempt === maxAttempts) {
+          throw new Error(`Upload failed after ${maxAttempts} attempts`)
+        }
+        
+        // Exponential backoff
+        await new Promise(resolve => 
+          setTimeout(resolve, Math.pow(2, attempt) * 1000)
+        )
+      } else {
+        // Non-retryable error
+        throw error
+      }
+    }
+  }
+}
+```
+
+### User-Friendly Messages
+
+```typescript
+import { StoreError, CommitError } from '@filoz/synapse-sdk/errors'
+
+function getErrorMessage(error: unknown): string {
+  if (StoreError.is(error)) {
+    return 'Failed to upload data to storage provider. Please try again.'
+  }
+  
+  if (CommitError.is(error)) {
+    return 'Data uploaded but not finalized on blockchain. Contact support.'
+  }
+  
+  if (error instanceof Error) {
+    if (error.message.includes('user rejected')) {
+      return 'Transaction was cancelled.'
+    }
+    if (error.message.includes('insufficient')) {
+      return 'Insufficient balance for transaction.'
+    }
+    return error.message
+  }
+  
+  return 'An unexpected error occurred.'
+}
+
+try {
+  await synapse.storage.upload(data)
+} catch (error) {
+  alert(getErrorMessage(error))
+}
+```
+
+## Error Context
+
+All SDK errors include contextual information:
+
+```typescript
+try {
+  await synapse.storage.upload(data)
+} catch (error) {
+  if (StoreError.is(error)) {
+    console.error('Error:', error.message)
+    console.error('Provider ID:', error.providerId)
+    console.error('Endpoint:', error.endpoint)
+    
+    if (error.cause) {
+      console.error('Root cause:', error.cause.message)
+    }
+    
+    // JSON serialization for logging
+    console.log('Error details:', JSON.stringify(error.toJSON()))
+  }
+}
+```
+
+## Best Practices
+
+1. **Always check error types** - Use type guards to identify specific errors
+2. **Inspect failures array** - Check `result.failures` for partial failures
+3. **Log error context** - Include providerId, endpoint, and cause in logs
+4. **Provide user feedback** - Show clear messages for different error types
+5. **Implement retry logic** - Retry transient failures with backoff
+6. **Handle partial success** - Decide if partial uploads are acceptable
+7. **Monitor error rates** - Track error frequencies to identify issues
+
+## See Also
+
+- [StorageManager](/api/storage-manager) - Upload operations
+- [Error Handling Guide](/guides/error-handling) - Comprehensive guide
+- [Monitoring](/guides/monitoring) - Error tracking patterns

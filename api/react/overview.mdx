@@ -1,0 +1,170 @@
+---
+title: 'React Hooks Overview'
+description: 'React hooks for Synapse SDK integration'
+---
+
+## Overview
+
+The `@filoz/synapse-react` package provides React hooks for integrating Synapse SDK with React applications. Built on [Wagmi](https://wagmi.sh/) and [TanStack Query](https://tanstack.com/query).
+
+<Note>
+**Beta Package**
+
+The React hooks are currently in beta. The API may change in future releases.
+</Note>
+
+## Installation
+
+```bash
+npm install @filoz/synapse-react wagmi viem @tanstack/react-query
+```
+
+## Setup
+
+```typescript
+import { WagmiProvider, createConfig, http } from 'wagmi'
+import { calibration } from '@filoz/synapse-core/chains'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+const config = createConfig({
+  chains: [calibration],
+  transports: {
+    [calibration.id]: http()
+  }
+})
+
+const queryClient = new QueryClient()
+
+function App() {
+  return (
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <YourApp />
+      </QueryClientProvider>
+    </WagmiProvider>
+  )
+}
+```
+
+## Available Hooks
+
+### Warm Storage
+
+- `useUpload` - Upload files to storage
+- `useCreateDataSet` - Create a new data set
+- `useDataSets` - Query user's data sets
+- `useDeletePiece` - Delete a piece from storage
+- `useProviders` - Query service providers
+- `useServicePrice` - Get storage pricing
+
+### Payments
+
+- `useDepositAndApprove` - Deposit funds and approve operator
+
+### ERC20
+
+Hooks for USDFC token operations
+
+## Quick Example
+
+```typescript
+import { useUpload, useDataSets } from '@filoz/synapse-react/warm-storage'
+import { useState } from 'react'
+
+function UploadComponent() {
+  const [files, setFiles] = useState<File[]>([])
+  const { data: dataSets } = useDataSets()
+  const upload = useUpload({
+    onHash: (hash) => console.log('Upload tx:', hash)
+  })
+
+  const handleUpload = async () => {
+    if (dataSets && dataSets.length > 0 && files.length > 0) {
+      await upload.mutateAsync({
+        files,
+        dataSetId: dataSets[0].dataSetId
+      })
+    }
+  }
+
+  return (
+    <div>
+      <input 
+        type="file" 
+        multiple
+        onChange={(e) => setFiles(Array.from(e.target.files || []))}
+      />
+      
+      <button 
+        onClick={handleUpload}
+        disabled={upload.isPending || !dataSets || files.length === 0}
+      >
+        {upload.isPending ? 'Uploading...' : 'Upload'}
+      </button>
+      
+      {upload.isError && (
+        <div>Error: {upload.error.message}</div>
+      )}
+      
+      {upload.isSuccess && (
+        <div>Upload successful!</div>
+      )}
+    </div>
+  )
+}
+```
+
+## Hook Patterns
+
+### Query Hooks
+
+For reading data:
+
+```typescript
+const { data, isLoading, error, refetch } = useDataSets()
+
+if (isLoading) return <div>Loading...</div>
+if (error) return <div>Error: {error.message}</div>
+
+return (
+  <div>
+    {data.map(ds => (
+      <div key={ds.dataSetId.toString()}>
+        Dataset {ds.dataSetId.toString()}
+      </div>
+    ))}
+  </div>
+)
+```
+
+### Mutation Hooks
+
+For write operations:
+
+```typescript
+const upload = useUpload({
+  onHash: (hash) => console.log('Tx:', hash),
+  mutation: {
+    onSuccess: (data) => {
+      console.log('Success:', data)
+    },
+    onError: (error) => {
+      console.error('Failed:', error)
+    }
+  }
+})
+
+// Trigger mutation
+await upload.mutateAsync({ files, dataSetId })
+
+// Check status
+if (upload.isPending) { /* ... */ }
+if (upload.isSuccess) { /* ... */ }
+if (upload.isError) { /* ... */ }
+```
+
+## See Also
+
+- [Hooks Reference](/api/react/hooks) - Complete hook documentation
+- [Wagmi Documentation](https://wagmi.sh/) - Wagmi setup and usage
+- [TanStack Query](https://tanstack.com/query) - Query management

@@ -1,0 +1,192 @@
+---
+title: 'Synapse'
+description: 'Main entry point for interacting with Filecoin storage and payment services'
+---
+
+## Overview
+
+The `Synapse` class is the primary interface for interacting with Filecoin Onchain Cloud. It provides access to storage operations, payment management, and service provider interactions through a unified API.
+
+## Creation
+
+### `Synapse.create()`
+
+Create a new Synapse instance with configuration options.
+
+<ParamField path="options" type="SynapseOptions" required>
+  Configuration options for the Synapse instance
+  
+  <Expandable title="properties">
+    <ParamField path="account" type="Account | Address" required>
+      Viem account or wallet address
+    </ParamField>
+    
+    <ParamField path="transport" type="Transport">
+      Viem transport for RPC communication (defaults to http())
+    </ParamField>
+    
+    <ParamField path="chain" type="Chain">
+      Filecoin chain configuration (defaults to calibration testnet)
+    </ParamField>
+    
+    <ParamField path="sessionKey" type="SessionKey<'Secp256k1'>">
+      Optional session key for delegated signing
+    </ParamField>
+    
+    <ParamField path="withCDN" type="boolean" default="false">
+      Enable CDN services for faster retrieval
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="synapse" type="Synapse">
+  A fully initialized Synapse instance
+</ResponseField>
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { privateKeyToAccount } from 'viem/accounts'
+import { http } from 'viem'
+import { calibration } from '@filoz/synapse-core/chains'
+
+const account = privateKeyToAccount('0x...')
+
+const synapse = Synapse.create({
+  account,
+  transport: http('https://api.calibration.node.glif.io/rpc/v1'),
+  chain: calibration,
+  withCDN: true
+})
+```
+
+## Properties
+
+### `synapse.storage`
+
+Access the [StorageManager](/api/storage-manager) for all storage operations.
+
+```typescript
+const result = await synapse.storage.upload(data)
+```
+
+### `synapse.payments`
+
+Access the [PaymentsService](/api/payments-service) for deposits, withdrawals, and payment rails.
+
+```typescript
+const balance = await synapse.payments.balance()
+```
+
+### `synapse.providers`
+
+Access the [SPRegistryService](/api/sp-registry-service) for service provider information.
+
+```typescript
+const providers = await synapse.providers.getProviders()
+```
+
+### `synapse.filbeam`
+
+Access the [FilBeamService](/api/filbeam-service) for CDN statistics and monitoring.
+
+```typescript
+const stats = await synapse.filbeam.getDataSetStats(dataSetId)
+```
+
+### `synapse.client`
+
+The underlying Viem client with public actions.
+
+```typescript
+const blockNumber = await synapse.client.getBlockNumber()
+```
+
+### `synapse.sessionClient`
+
+The session key client if configured, otherwise `undefined`.
+
+### `synapse.chain`
+
+The Filecoin chain configuration.
+
+```typescript
+console.log(synapse.chain.name) // "Filecoin - Calibration testnet"
+```
+
+## Methods
+
+### `getProviderInfo()`
+
+Get detailed information about a specific service provider.
+
+<ParamField path="providerAddress" type="Address | bigint" required>
+  Provider's address or provider ID
+</ParamField>
+
+<ResponseField name="provider" type="PDPProvider">
+  Provider information including:
+  - `id` - Provider ID
+  - `serviceProvider` - Provider's address
+  - `pdp.serviceURL` - PDP endpoint URL
+  - Pricing and metadata
+</ResponseField>
+
+```typescript
+// By provider ID
+const provider = await synapse.getProviderInfo(1n)
+
+// By address
+const provider = await synapse.getProviderInfo('0x...')
+
+console.log(provider.pdp.serviceURL)
+```
+
+## Complete Example
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+import { privateKeyToAccount } from 'viem/accounts'
+import { calibration } from '@filoz/synapse-core/chains'
+
+// Initialize Synapse
+const account = privateKeyToAccount(process.env.PRIVATE_KEY)
+const synapse = Synapse.create({
+  account,
+  chain: calibration,
+  withCDN: true
+})
+
+// Upload data
+const data = new Uint8Array([1, 2, 3, 4])
+const uploadResult = await synapse.storage.upload(data)
+
+console.log('Uploaded to:', uploadResult.copies.length, 'providers')
+console.log('PieceCID:', uploadResult.pieceCid.toString())
+
+// Download data
+const retrieved = await synapse.storage.download({
+  pieceCid: uploadResult.pieceCid
+})
+
+// Check balance
+const balance = await synapse.payments.balance()
+console.log('Balance:', balance.toString())
+```
+
+## Error Handling
+
+```typescript
+try {
+  const result = await synapse.storage.upload(data)
+} catch (error) {
+  if (error instanceof Error) {
+    console.error('Upload failed:', error.message)
+  }
+}
+```
+
+## See Also
+
+- [StorageManager](/api/storage-manager) - Storage operations
+- [PaymentsService](/api/payments-service) - Payment management
+- [Session Keys](/api/core/session-key) - Delegated signing

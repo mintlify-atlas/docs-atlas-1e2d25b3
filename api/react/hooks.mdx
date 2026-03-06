@@ -1,0 +1,329 @@
+---
+title: 'React Hooks Reference'
+description: 'Complete reference for Synapse React hooks'
+---
+
+## Warm Storage Hooks
+
+### `useUpload`
+
+Upload files to an existing data set.
+
+```typescript
+import { useUpload } from '@filoz/synapse-react/warm-storage'
+
+function UploadComponent() {
+  const upload = useUpload({
+    onHash: (hash) => console.log('Tx submitted:', hash),
+    mutation: {
+      onSuccess: (data) => {
+        console.log('Pieces added:', data.confirmedPieceIds)
+      }
+    }
+  })
+
+  const handleUpload = async (files: File[], dataSetId: bigint) => {
+    await upload.mutateAsync({ files, dataSetId })
+  }
+
+  return (
+    <button 
+      onClick={() => handleUpload(files, dataSetId)}
+      disabled={upload.isPending}
+    >
+      {upload.isPending ? 'Uploading...' : 'Upload'}
+    </button>
+  )
+}
+```
+
+### `useCreateDataSet`
+
+Create a new data set.
+
+```typescript
+import { useCreateDataSet } from '@filoz/synapse-react/warm-storage'
+
+function CreateDataSetButton() {
+  const createDataSet = useCreateDataSet({
+    onHash: (hash) => console.log('Creating:', hash)
+  })
+
+  const handleCreate = async () => {
+    const result = await createDataSet.mutateAsync({
+      providerId: 1n,
+      withCDN: true
+    })
+    console.log('Dataset created:', result.dataSetId)
+  }
+
+  return (
+    <button onClick={handleCreate} disabled={createDataSet.isPending}>
+      Create Dataset
+    </button>
+  )
+}
+```
+
+### `useDataSets`
+
+Query all data sets for the connected wallet.
+
+```typescript
+import { useDataSets } from '@filoz/synapse-react/warm-storage'
+
+function DataSetList() {
+  const { data, isLoading, error, refetch } = useDataSets()
+
+  if (isLoading) return <div>Loading datasets...</div>
+  if (error) return <div>Error: {error.message}</div>
+
+  return (
+    <div>
+      <button onClick={() => refetch()}>Refresh</button>
+      
+      {data?.map(ds => (
+        <div key={ds.dataSetId.toString()}>
+          <h3>Dataset {ds.dataSetId.toString()}</h3>
+          <p>Provider: {ds.providerId.toString()}</p>
+          <p>Pieces: {ds.activePieceCount.toString()}</p>
+          <p>CDN: {ds.withCDN ? 'Yes' : 'No'}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+```
+
+### `useDeletePiece`
+
+Delete a piece from a data set.
+
+```typescript
+import { useDeletePiece } from '@filoz/synapse-react/warm-storage'
+
+function DeleteButton({ dataSetId, pieceId }) {
+  const deletePiece = useDeletePiece({
+    onHash: (hash) => console.log('Delete tx:', hash)
+  })
+
+  const handleDelete = async () => {
+    await deletePiece.mutateAsync({
+      dataSetId,
+      pieceId
+    })
+  }
+
+  return (
+    <button onClick={handleDelete} disabled={deletePiece.isPending}>
+      {deletePiece.isPending ? 'Deleting...' : 'Delete'}
+    </button>
+  )
+}
+```
+
+### `useProviders`
+
+Query all available service providers.
+
+```typescript
+import { useProviders } from '@filoz/synapse-react/warm-storage'
+
+function ProviderList() {
+  const { data, isLoading } = useProviders()
+
+  if (isLoading) return <div>Loading providers...</div>
+
+  return (
+    <div>
+      {data?.map(provider => (
+        <div key={provider.id.toString()}>
+          <h3>{provider.name}</h3>
+          <p>{provider.description}</p>
+          <p>URL: {provider.pdp.serviceURL}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+```
+
+### `useServicePrice`
+
+Get storage service pricing.
+
+```typescript
+import { useServicePrice } from '@filoz/synapse-react/warm-storage'
+import { formatUnits } from 'viem'
+
+function PricingDisplay() {
+  const { data, isLoading } = useServicePrice()
+
+  if (isLoading) return <div>Loading pricing...</div>
+
+  return (
+    <div>
+      <h3>Storage Pricing</h3>
+      <p>
+        Base: {formatUnits(data.pricePerTiBPerMonthNoCDN, 18)} USDFC/TiB/month
+      </p>
+      <p>
+        CDN Egress: {formatUnits(data.pricePerTiBCdnEgress, 18)} USDFC/TiB
+      </p>
+    </div>
+  )
+}
+```
+
+## Payment Hooks
+
+### `useDepositAndApprove`
+
+Deposit funds and approve service operator.
+
+```typescript
+import { useDepositAndApprove } from '@filoz/synapse-react/payments'
+import { parseUnits } from 'viem'
+
+function DepositButton() {
+  const deposit = useDepositAndApprove({
+    onHash: (hash) => console.log('Deposit tx:', hash)
+  })
+
+  const handleDeposit = async () => {
+    await deposit.mutateAsync({
+      amount: parseUnits('100', 18),
+      rateAllowance: parseUnits('10', 18),
+      lockupAllowance: parseUnits('50', 18)
+    })
+  }
+
+  return (
+    <button onClick={handleDeposit} disabled={deposit.isPending}>
+      {deposit.isPending ? 'Depositing...' : 'Deposit 100 USDFC'}
+    </button>
+  )
+}
+```
+
+## Complete Example
+
+```typescript
+import { 
+  useDataSets, 
+  useUpload, 
+  useCreateDataSet,
+  useProviders 
+} from '@filoz/synapse-react/warm-storage'
+import { useState } from 'react'
+
+function StorageApp() {
+  const [files, setFiles] = useState<File[]>([])
+  const [selectedDataSet, setSelectedDataSet] = useState<bigint | null>(null)
+
+  const { data: dataSets, isLoading: loadingDataSets } = useDataSets()
+  const { data: providers } = useProviders()
+  
+  const createDataSet = useCreateDataSet({
+    onHash: (hash) => console.log('Creating dataset:', hash),
+    mutation: {
+      onSuccess: (data) => {
+        setSelectedDataSet(data.dataSetId)
+      }
+    }
+  })
+
+  const upload = useUpload({
+    onHash: (hash) => console.log('Uploading:', hash),
+    mutation: {
+      onSuccess: () => {
+        setFiles([])
+        alert('Upload successful!')
+      }
+    }
+  })
+
+  const handleCreateDataSet = async () => {
+    if (providers && providers.length > 0) {
+      await createDataSet.mutateAsync({
+        providerId: providers[0].id,
+        withCDN: true
+      })
+    }
+  }
+
+  const handleUpload = async () => {
+    if (selectedDataSet && files.length > 0) {
+      await upload.mutateAsync({
+        files,
+        dataSetId: selectedDataSet
+      })
+    }
+  }
+
+  if (loadingDataSets) return <div>Loading...</div>
+
+  return (
+    <div>
+      <h1>Filecoin Storage</h1>
+
+      <section>
+        <h2>Data Sets</h2>
+        {dataSets && dataSets.length > 0 ? (
+          <select 
+            onChange={(e) => setSelectedDataSet(BigInt(e.target.value))}
+            value={selectedDataSet?.toString() || ''}
+          >
+            <option value="">Select dataset</option>
+            {dataSets.map(ds => (
+              <option key={ds.dataSetId.toString()} value={ds.dataSetId.toString()}>
+                Dataset {ds.dataSetId.toString()} ({ds.activePieceCount.toString()} pieces)
+              </option>
+            ))}
+          </select>
+        ) : (
+          <p>No datasets yet</p>
+        )}
+        
+        <button 
+          onClick={handleCreateDataSet}
+          disabled={createDataSet.isPending}
+        >
+          {createDataSet.isPending ? 'Creating...' : 'Create New Dataset'}
+        </button>
+      </section>
+
+      <section>
+        <h2>Upload Files</h2>
+        <input
+          type="file"
+          multiple
+          onChange={(e) => setFiles(Array.from(e.target.files || []))}
+        />
+        <p>Selected: {files.length} file(s)</p>
+        
+        <button
+          onClick={handleUpload}
+          disabled={upload.isPending || !selectedDataSet || files.length === 0}
+        >
+          {upload.isPending ? 'Uploading...' : 'Upload'}
+        </button>
+        
+        {upload.isError && (
+          <div style={{ color: 'red' }}>
+            Error: {upload.error.message}
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+export default StorageApp
+```
+
+## See Also
+
+- [React Hooks Overview](/api/react/overview) - Setup and patterns
+- [Wagmi](https://wagmi.sh/) - Wallet connection
+- [TanStack Query](https://tanstack.com/query) - Query management

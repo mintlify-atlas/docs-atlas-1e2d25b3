@@ -1,0 +1,359 @@
+---
+title: Multi-Copy Storage
+description: Upload files to multiple providers for redundancy
+icon: copy
+---
+
+## Overview
+
+Multi-copy storage ensures your data is replicated across independent storage providers, improving availability and reducing dependency on any single provider.
+
+## Default Multi-Copy
+
+By default, uploads go to 2 providers (1 primary + 1 secondary):
+
+```typescript
+import { Synapse } from '@filoz/synapse-sdk'
+
+const synapse = await Synapse.create({ privateKey, rpcUrl })
+
+// Automatically uploads to 2 providers
+const result = await synapse.storage.upload(data)
+
+console.log(`Stored on ${result.copies.length} providers`)
+for (const copy of result.copies) {
+  console.log(`  ${copy.role}: Provider ${copy.providerId}`)
+  console.log(`    Data Set: ${copy.dataSetId}`)
+  console.log(`    Piece ID: ${copy.pieceId}`)
+}
+```
+
+## Specify Copy Count
+
+```typescript
+// Upload to 3 providers
+const result = await synapse.storage.upload(data, {
+  count: 3,
+})
+
+console.log(`Uploaded to ${result.copies.length} providers`)
+```
+
+## Specify Exact Providers
+
+```typescript
+// Upload to specific providers
+const result = await synapse.storage.upload(data, {
+  providerIds: [1n, 3n, 5n],
+})
+
+// Verify all specified providers succeeded
+const expectedIds = new Set([1n, 3n, 5n])
+const actualIds = new Set(result.copies.map(c => c.providerId))
+
+if (expectedIds.size === actualIds.size) {
+  console.log('✓ All specified providers succeeded')
+} else {
+  const failedIds = [...expectedIds].filter(id => !actualIds.has(id))
+  console.warn(`Failed on providers: ${failedIds.join(', ')}`)
+}
+```
+
+## Provider Selection
+
+### Endorsed vs Approved
+
+```typescript
+// Endorsed providers (curated, high-quality)
+const providers = await synapse.spRegistry.getAllActiveProviders()
+const endorsedIds = providers
+  .filter(p => p.endorsed)
+  .map(p => p.id)
+
+console.log(`Found ${endorsedIds.length} endorsed providers`)
+
+// Upload to endorsed providers
+const result = await synapse.storage.upload(data, {
+  providerIds: endorsedIds.slice(0, 3),
+})
+```
+
+### Auto-Select by Region
+
+```typescript
+const providers = await synapse.spRegistry.getAllActiveProviders()
+
+// Filter by region (from capabilities)
+const usProviders = providers.filter(p => 
+  p.pdp.capabilities?.region === 'us-west'
+)
+
+if (usProviders.length >= 2) {
+  const result = await synapse.storage.upload(data, {
+    providerIds: usProviders.slice(0, 2).map(p => p.id),
+  })
+}
+```
+
+## Handle Partial Failures
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 4,
+})
+
+console.log(`Success: ${result.copies.length} copies`)
+
+if (result.failures.length > 0) {
+  console.warn(`Failed: ${result.failures.length} copies`)
+  
+  for (const failure of result.failures) {
+    console.warn(`  Provider ${failure.providerId}:`)
+    console.warn(`    Role: ${failure.role}`)
+    console.warn(`    Error: ${failure.error}`)
+    console.warn(`    Explicit: ${failure.explicit}`)
+  }
+}
+
+// Check if minimum copies succeeded
+const MIN_COPIES = 2
+if (result.copies.length < MIN_COPIES) {
+  throw new Error(`Only ${result.copies.length} copies succeeded, need ${MIN_COPIES}`)
+}
+```
+
+## Retry Strategy
+
+### Auto-Retry on Failure
+
+```typescript
+const MIN_COPIES = 3
+let result
+let attempts = 0
+const MAX_ATTEMPTS = 3
+
+while (attempts < MAX_ATTEMPTS) {
+  result = await synapse.storage.upload(data, {
+    count: MIN_COPIES,
+    // Exclude failed providers from previous attempt
+    excludeProviderIds: result?.failures.map(f => f.providerId) || [],
+  })
+  
+  if (result.copies.length >= MIN_COPIES) {
+    console.log(`✓ Achieved ${result.copies.length} copies`)
+    break
+  }
+  
+  attempts++
+  console.log(`Attempt ${attempts}: only ${result.copies.length} copies, retrying...`)
+}
+
+if (result.copies.length < MIN_COPIES) {
+  throw new Error('Failed to achieve minimum copies')
+}
+```
+
+### Manual Retry Specific Providers
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  providerIds: [1n, 2n, 3n],
+})
+
+// Retry only failed providers
+if (result.failures.length > 0) {
+  const failedIds = result.failures.map(f => f.providerId)
+  
+  console.log(`Retrying failed providers: ${failedIds.join(', ')}`)
+  
+  const retryResult = await synapse.storage.upload(data, {
+    providerIds: failedIds,
+  })
+  
+  // Combine results
+  const allCopies = [...result.copies, ...retryResult.copies]
+  console.log(`Total successful copies: ${allCopies.length}`)
+}
+```
+
+## Pre-Create Contexts
+
+```typescript
+// Create contexts once, reuse for multiple uploads
+const contexts = await synapse.storage.createContexts({
+  count: 3,
+  withCDN: true,
+  callbacks: {
+    onProviderSelected: (provider) => {
+      console.log(`Using provider: ${provider.serviceProvider}`)
+    },
+  },
+})
+
+console.log(`Created ${contexts.length} contexts`)
+
+// Use contexts for multiple uploads
+const files = ['file1.txt', 'file2.txt', 'file3.txt']
+
+for (const file of files) {
+  const result = await synapse.storage.upload(
+    fs.readFileSync(file),
+    { contexts }
+  )
+  console.log(`${file}: ${result.copies.length} copies`)
+}
+```
+
+## Geo-Distributed Storage
+
+```typescript
+const providers = await synapse.spRegistry.getAllActiveProviders()
+
+// Distribute across regions
+const regions = ['us-west', 'us-east', 'eu-west']
+const selectedProviders: bigint[] = []
+
+for (const region of regions) {
+  const regionProvider = providers.find(p => 
+    p.pdp.capabilities?.region === region && p.active
+  )
+  
+  if (regionProvider) {
+    selectedProviders.push(regionProvider.id)
+  }
+}
+
+if (selectedProviders.length >= 2) {
+  const result = await synapse.storage.upload(data, {
+    providerIds: selectedProviders,
+  })
+  
+  console.log('Geo-distributed storage:')
+  for (const copy of result.copies) {
+    const provider = providers.find(p => p.id === copy.providerId)
+    console.log(`  ${provider?.pdp.capabilities?.region}: ${copy.dataSetId}`)
+  }
+}
+```
+
+## Cost Optimization
+
+```typescript
+// Compare costs for different copy counts
+const fileSize = 1024 * 1024 * 100 // 100 MB
+
+for (const count of [2, 3, 4]) {
+  const preflight = await synapse.storage.preflightUpload({ 
+    size: fileSize,
+  })
+  
+  // Multiply by copy count
+  const monthlyCost = preflight.estimatedCost.perMonth * BigInt(count)
+  
+  console.log(`${count} copies: ${formatUnits(monthlyCost)} USDFC/month`)
+}
+```
+
+## Verify All Copies
+
+```typescript
+const result = await synapse.storage.upload(data)
+
+// Verify each copy is retrievable
+for (const copy of result.copies) {
+  try {
+    const context = await synapse.storage.createContext({
+      providerId: copy.providerId,
+    })
+    
+    const downloaded = await context.download({ 
+      pieceCid: result.pieceCid 
+    })
+    
+    console.log(`✓ Provider ${copy.providerId}: verified`)
+  } catch (error) {
+    console.error(`✗ Provider ${copy.providerId}: failed to verify`)
+  }
+}
+```
+
+## Multi-Copy with Different Metadata
+
+```typescript
+// Create contexts with different metadata per provider
+const contexts = await Promise.all([
+  synapse.storage.createContext({
+    metadata: { tier: 'premium', region: 'us-west' },
+    withCDN: true,
+  }),
+  synapse.storage.createContext({
+    metadata: { tier: 'standard', region: 'us-east' },
+    withCDN: false,
+  }),
+])
+
+const result = await synapse.storage.upload(data, { contexts })
+```
+
+## Monitor Copy Status
+
+```typescript
+const result = await synapse.storage.upload(data, {
+  count: 3,
+  callbacks: {
+    onCopyComplete: (providerId, pieceCid) => {
+      console.log(`✓ Copy complete on provider ${providerId}`)
+    },
+    onCopyFailed: (providerId, pieceCid, error) => {
+      console.error(`✗ Copy failed on provider ${providerId}: ${error.message}`)
+    },
+  },
+})
+```
+
+## Redundancy Levels
+
+```typescript
+const REDUNDANCY_LEVELS = {
+  minimal: 2,    // Development
+  standard: 3,   // Production
+  high: 5,       // Critical data
+  maximum: 7,    // Maximum safety
+}
+
+const result = await synapse.storage.upload(data, {
+  count: REDUNDANCY_LEVELS.high,
+})
+
+if (result.copies.length < REDUNDANCY_LEVELS.high) {
+  console.warn('Did not achieve target redundancy level')
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use 2+ Copies" icon="copy">
+    Always use at least 2 copies for production data
+  </Card>
+  <Card title="Check Failures" icon="triangle-exclamation">
+    Always check result.failures array
+  </Card>
+  <Card title="Endorsed Providers" icon="award">
+    Prefer endorsed providers for reliability
+  </Card>
+  <Card title="Geo-Distribute" icon="earth-americas">
+    Distribute copies across regions when possible
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Split Operations" href="/examples/split-operations" icon="scissors">
+    Use split operations for batch uploads
+  </Card>
+  <Card title="Provider Registry" href="/guides/provider-registry" icon="list">
+    Learn about provider discovery
+  </Card>
+</CardGroup>
