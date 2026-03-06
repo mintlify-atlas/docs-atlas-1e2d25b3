@@ -1,0 +1,145 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Synapse SDK",
+  "projectDescription": "JavaScript SDK for building on Filecoin Onchain Cloud with decentralized storage and payment services",
+  "theme": "aspen",
+  "primaryColor": "#0995f8",
+  "lightColor": "#c8e7f9",
+  "darkColor": "#5cb8fc",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/storage-pipeline",
+              "concepts/multi-copy-upload",
+              "concepts/provider-selection",
+              "concepts/session-keys"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/storage-operations",
+              "guides/payment-management",
+              "guides/provider-registry",
+              "guides/filbeam-cdn",
+              "guides/session-keys"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/upload-download",
+              "examples/multi-copy-storage",
+              "examples/split-operations",
+              "examples/browser-integration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Synapse SDK",
+            "pages": [
+              "api/synapse-class",
+              "api/storage-manager",
+              "api/storage-context",
+              "api/payments-service",
+              "api/warm-storage-service",
+              "api/sp-registry-service",
+              "api/filbeam-service"
+            ]
+          },
+          {
+            "group": "Synapse Core",
+            "pages": [
+              "api/core/chains",
+              "api/core/sp-client",
+              "api/core/typed-data",
+              "api/core/session-key",
+              "api/core/piece-cid",
+              "api/core/contract-actions"
+            ]
+          },
+          {
+            "group": "React Hooks",
+            "pages": [
+              "api/react/overview",
+              "api/react/hooks"
+            ]
+          },
+          {
+            "group": "Types & Errors",
+            "pages": [
+              "api/types",
+              "api/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Smart Contracts",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "contracts/overview",
+              "contracts/architecture"
+            ]
+          },
+          {
+            "group": "Contracts",
+            "pages": [
+              "contracts/warm-storage",
+              "contracts/pdp-verifier",
+              "contracts/filecoin-pay",
+              "contracts/sp-registry",
+              "contracts/session-key-registry"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-copy storage with automatic provider selection",
+    "Integrated payment rails with ERC20 and FIL support",
+    "Session key delegation for seamless UX",
+    "FilBeam CDN integration for fast content delivery",
+    "PieceCID utilities and content addressing",
+    "Service provider discovery and registry",
+    "Browser and Node.js compatibility",
+    "TypeScript-first with full type safety"
+  ],
+  "publicApiSurface": [
+    "Synapse.create()",
+    "synapse.storage.upload()",
+    "synapse.storage.download()",
+    "synapse.storage.createContexts()",
+    "synapse.payments.deposit()",
+    "synapse.payments.withdraw()",
+    "synapse.providers.getProvider()",
+    "StorageContext.store()",
+    "StorageContext.commit()",
+    "StorageContext.pull()",
+    "SessionKey.fromSecp256k1()",
+    "calculatePieceCID()",
+    "SignCreateDataSet",
+    "SignAddPieces"
+  ]
+}
